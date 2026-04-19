@@ -1,0 +1,15 @@
+[package]
+name = "pulsar-config"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance, plugin-friendly configuration management for games and applications"
+license = "MIT"
+keywords = ["config", "settings", "plugin", "concurrent", "game-engine"]
+categories = ["config", "data-structures", "concurrency"]
+
+[dependencies]
+dashmap = "6"
+parking_lot = "0.12"
+
+[dev-dependencies]
+# parking_lot is already a main dep; listed here for clarity in tests
