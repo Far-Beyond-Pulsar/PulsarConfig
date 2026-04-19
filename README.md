@@ -1,4 +1,3 @@
 # PulsarConfig
 
-PulsarConfig is a crate providing a high performance in-memory database for settings management in applications of all shapes and sizes designed especially for large scale settings screens in complex applications.
-
+PulsarConfig is a crate providing a high performance in-memory database for settings management in applications of all shapes and sizes designed especially for large scale settings screens in complex applications. The goal of this crate is to provide a centralized source of truth for all applications settings that can be queried from multiple threads, used in performance intensive environments and handle all the complexity of storing the app configuration in a user friendly way for you.
