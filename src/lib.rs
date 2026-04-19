@@ -5,11 +5,13 @@
 //! services.
 //!
 //! PulsarConfig acts as a **centralized source of truth** for every setting in
-//! your application. It is built specifically for large-scale settings screens
-//! in complex applications: the kind where dozens of plugins or subsystems each
-//! own a slice of the configuration, users can search and filter thousands of
-//! keys, and multiple threads need to read values simultaneously without paying
-//! a synchronisation tax.
+//! your application. Settings are organised in a three-tier N-level hierarchy:
+//!
+//! ```text
+//! namespace  ("editor" vs "project")
+//!   └── owner path  ("subsystem/physics/main")   ← any depth
+//!         └── key   ("gravity")
+//! ```
 //!
 //! ## What PulsarConfig does for you
 //!
@@ -18,9 +20,9 @@
 //! - **Handles all storage complexity** — namespacing, defaults, validation,
 //!   type coercion, and change notification are built in. You declare a schema;
 //!   PulsarConfig handles the rest.
-//! - **Scales with your codebase** — register as many namespaces as you like.
-//!   Each plugin or subsystem gets an isolated [`NamespaceHandle`]; it cannot
-//!   accidentally write to another subsystem's settings.
+//! - **Scales with your codebase** — register as many `(namespace, owner)`
+//!   pairs as you like. Each plugin or subsystem gets an isolated
+//!   [`OwnerHandle`]; it cannot accidentally write to another owner's settings.
 //! - **Stays fast under load** — the storage layer is backed by
 //!   [`DashMap`](dashmap::DashMap), giving you fine-grained shard locking so
 //!   concurrent reads are effectively contention-free.
@@ -32,12 +34,13 @@
 //!
 //! | Goal | How it's achieved |
 //! |------|------------------|
-//! | **Schema-first** | Plugins declare keys, types, defaults, and validators upfront |
-//! | **Plugin isolation** | Each plugin holds a [`NamespaceHandle`] — cross-namespace writes are impossible |
+//! | **Schema-first** | Owners declare keys, types, defaults, and validators upfront |
+//! | **Plugin isolation** | Each plugin holds an [`OwnerHandle`] — cross-owner writes are impossible |
 //! | **Concurrent** | [`DashMap`](dashmap::DashMap) sharding; reads are effectively lock-free |
 //! | **Reactive** | RAII [`ListenerId`] tokens wire up change callbacks with automatic cleanup |
 //! | **Type-safe** | Typed getters (`get_bool`, `get_int`, …) return `Result`, never panic |
 //! | **Zero overhead defaults** | All values are pre-seeded at registration; `get` is a single map lookup |
+//! | **N-level paths** | Owner paths can be any depth: `"a"`, `"a/b"`, `"a/b/c/d/e"` |
 //!
 //! ## Quick Start
 //!
@@ -50,7 +53,9 @@
 //! // 1. Create the manager — typically stored in your engine/app.
 //! let manager = ConfigManager::new();
 //!
-//! // 2. A plugin (or subsystem) declares its schema and registers it.
+//! // 2. A plugin declares its schema and registers it.
+//! //    - "editor" is the namespace (top-level scope).
+//! //    - "renderer/shadows" is the owner path (N levels deep).
 //! let schema = NamespaceSchema::new("Shadow Renderer", "Controls shadow rendering")
 //!     .setting("enabled",      SchemaEntry::new("Enable shadows", true))
 //!     .setting("max_distance", SchemaEntry::new("Max draw distance (world units)", 500.0_f64)
@@ -62,7 +67,7 @@
 //!     .setting("tint",         SchemaEntry::new("Shadow tint color", Color::rgba(0, 0, 0, 128)));
 //!
 //! // `shadows` is the plugin's private, scoped handle.
-//! let shadows = manager.register_namespace("renderer.shadows", schema).unwrap();
+//! let shadows = manager.register("editor", "renderer/shadows", schema).unwrap();
 //!
 //! // 3. Read settings — always returns a value (defaults are pre-loaded).
 //! let enabled      = shadows.get_bool("enabled").unwrap();
@@ -73,29 +78,28 @@
 //!
 //! // 5. Subscribe to changes.  `_guard` removes the listener when dropped.
 //! let _guard = shadows.on_change("enabled", |event| {
-//!     println!("shadows.enabled → {:?}", event.new_value);
+//!     println!("renderer/shadows.enabled → {:?}", event.new_value);
 //! }).unwrap();
 //!
-//! // 6. Cross-plugin read (read-only, no handle required).
-//! let v = manager.get("renderer.shadows", "quality").unwrap();
+//! // 6. Cross-owner read (read-only; no handle required).
+//! let v = manager.get("editor", "renderer/shadows", "quality").unwrap();
 //!
-//! // 7. Search across all namespaces.
+//! // 7. Search across all owners.
 //! let results = manager.search("performance");
 //! ```
 //!
 //! ## Plugin Registration Pattern
 //!
 //! Inspired by how VS Code extensions contribute settings, each plugin calls
-//! [`ConfigManager::register_namespace`] exactly once (typically at startup or
-//! plugin load time). The returned [`NamespaceHandle`] is the plugin's only
-//! write path — other plugins can only read cross-namespace values through
-//! [`ConfigManager::get`].
+//! [`ConfigManager::register`] exactly once (typically at startup or plugin
+//! load time). The returned [`OwnerHandle`] is the plugin's only write path —
+//! other code can only read cross-owner values through [`ConfigManager::get`].
 //!
 //! ```rust
-//! use pulsar_config::{ConfigManager, NamespaceSchema, SchemaEntry, Validator};
+//! use pulsar_config::{ConfigManager, NamespaceSchema, SchemaEntry, Validator, OwnerHandle};
 //!
 //! pub struct AudioPlugin {
-//!     config: pulsar_config::NamespaceHandle,
+//!     config: OwnerHandle,
 //! }
 //!
 //! impl AudioPlugin {
@@ -104,14 +108,13 @@
 //!             .setting("master_volume", SchemaEntry::new("Master volume (0–100)", 80_i64)
 //!                 .validator(Validator::int_range(0, 100)))
 //!             .setting("sample_rate",  SchemaEntry::new("Output sample rate", 48_000_i64)
-//!                 .validator(Validator::string_one_of(["44100", "48000", "96000"]))
 //!                 .read_only())
 //!             .setting("reverb",       SchemaEntry::new("Enable reverb", true)
 //!                 .tag("quality"));
 //!
 //!         let config = manager
-//!             .register_namespace("audio", schema)
-//!             .expect("audio namespace already registered");
+//!             .register("editor", "plugin/audio", schema)
+//!             .expect("audio owner already registered");
 //!
 //!         Self { config }
 //!     }
@@ -129,7 +132,7 @@ pub mod schema;
 pub mod value;
 
 pub use error::ConfigError;
-pub use manager::{ChangeEvent, ConfigManager, ListenerId, NamespaceHandle, SearchResult, SettingInfo};
+pub use manager::{ChangeEvent, ConfigManager, ListenerId, OwnerHandle, SearchResult, SettingInfo};
 pub use persist::{ConfigStore, PersistError};
 pub use schema::{NamespaceSchema, SchemaEntry, Validator, ValidatorFn};
 pub use value::{Color, ConfigValue};

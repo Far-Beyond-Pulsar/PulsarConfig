@@ -11,39 +11,112 @@ use crate::error::ConfigError;
 use crate::schema::NamespaceSchema;
 use crate::value::{Color, ConfigValue};
 
-// ─── Change events ───────────────────────────────────────────────────────────
+// ─── Key helpers ─────────────────────────────────────────────────────────────
 
-/// Describes a single value change. Passed to every matching change listener.
+/// Build the internal DashMap key for a `(namespace, owner)` pair.
+///
+/// The null byte `\0` is used as a separator because it cannot appear in
+/// normal user-supplied strings and is therefore unambiguous.
+///
+/// Layout: `"{namespace}\0{owner[0]}\0{owner[1]}\0..."`
+pub(crate) fn compound_key(namespace: &str, owner: &[String]) -> String {
+    let mut k = namespace.to_owned();
+    for seg in owner {
+        k.push('\0');
+        k.push_str(seg);
+    }
+    k
+}
+
+/// Parse a slash-delimited owner path string into its individual segments.
+///
+/// Leading, trailing, and consecutive slashes are ignored gracefully.
+///
+/// `"subsystem/physics/main"` → `["subsystem", "physics", "main"]`
+pub(crate) fn parse_owner_path(path: &str) -> Vec<String> {
+    path.split('/')
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Reject any identifier component that contains the internal separator `\0`.
+fn validate_id(s: &str, label: &str) -> Result<(), ConfigError> {
+    if s.contains('\0') {
+        Err(ConfigError::InvalidIdentifier(format!(
+            "{label} must not contain null bytes: {s:?}"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+// ─── Listener scope ───────────────────────────────────────────────────────────
+
+/// Identifies the scope of a change listener, used as the DashMap key in the
+/// listener registry.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ListenerScope {
+    /// Fires only when `key` changes within the owner identified by `compound`.
+    Key { compound: String, key: String },
+    /// Fires for any key change within the owner identified by `compound`.
+    Owner { compound: String },
+    /// Fires for any key change across every owner and namespace.
+    Global,
+}
+
+// ─── Change events ────────────────────────────────────────────────────────────
+
+/// Describes a single value change passed to every matching listener.
 #[derive(Debug, Clone)]
 pub struct ChangeEvent {
-    /// The namespace ID that contains the changed key.
+    /// The top-level namespace (e.g. `"editor"` or `"project"`).
     pub namespace: String,
-    /// The key that changed.
+    /// The N-level owner path segments (e.g. `["subsystem", "physics", "main"]`).
+    pub owner: Vec<String>,
+    /// The setting key that changed.
     pub key: String,
-    /// The previous value, or `None` if this is the first write (should not
-    /// occur in normal usage since defaults are written at registration time).
+    /// The value before the change, or `None` on the very first write.
     pub old_value: Option<ConfigValue>,
     /// The new value.
     pub new_value: ConfigValue,
 }
 
-// ─── Search / listing types ──────────────────────────────────────────────────
+impl ChangeEvent {
+    /// Convenience — returns the owner as a slash-joined string.
+    pub fn owner_path(&self) -> String {
+        self.owner.join("/")
+    }
+}
+
+// ─── Search / listing types ───────────────────────────────────────────────────
 
 /// A single result returned by [`ConfigManager::search`].
 #[derive(Debug, Clone)]
 pub struct SearchResult {
-    pub namespace_id: String,
-    pub namespace_display_name: String,
+    /// Top-level namespace.
+    pub namespace: String,
+    /// N-level owner path segments.
+    pub owner: Vec<String>,
+    /// The display name supplied in the owner's [`NamespaceSchema`].
+    pub owner_display_name: String,
+    /// The setting key.
     pub key: String,
     pub description: String,
     pub tags: Vec<String>,
     pub current_value: ConfigValue,
 }
 
+impl SearchResult {
+    /// Convenience — returns the owner as a slash-joined string.
+    pub fn owner_path(&self) -> String {
+        self.owner.join("/")
+    }
+}
+
 /// A snapshot of one setting's metadata and current value.
 ///
-/// Returned by [`ConfigManager::list_settings`] and
-/// [`NamespaceHandle::list_settings`].
+/// Returned by [`ConfigManager::list_settings`] and [`OwnerHandle::list_settings`].
 #[derive(Debug, Clone)]
 pub struct SettingInfo {
     pub key: String,
@@ -54,7 +127,7 @@ pub struct SettingInfo {
     pub read_only: bool,
 }
 
-// ─── Listener internals ──────────────────────────────────────────────────────
+// ─── Listener internals ───────────────────────────────────────────────────────
 
 type ListenerCallback = Arc<dyn Fn(&ChangeEvent) + Send + Sync>;
 
@@ -65,197 +138,101 @@ struct Listener {
 
 /// A RAII guard for a change listener.
 ///
-/// The listener is **automatically removed** when this value is dropped.
-/// Store it for as long as you want the listener to be active.
-///
-/// ```rust
-/// # use pulsar_config::*;
-/// # let manager = ConfigManager::new();
-/// # let schema = NamespaceSchema::new("P","d").setting("k", SchemaEntry::new("d", true));
-/// # let handle = manager.register_namespace("p", schema).unwrap();
-/// let _guard = handle.on_change("k", |e| println!("{:?}", e.new_value)).unwrap();
-/// // listener fires until `_guard` is dropped
-/// ```
+/// The listener is **automatically removed** when this value is dropped —
+/// no explicit deregistration call is needed.
 pub struct ListenerId {
     id: u64,
-    /// The compound key used in `Inner::listeners` (`"namespace::key"` or `"namespace::*"` or `"*"`).
-    listener_key: String,
+    scope: ListenerScope,
     inner: Arc<Inner>,
 }
 
 impl Drop for ListenerId {
     fn drop(&mut self) {
-        if let Some(entry) = self.inner.listeners.get(&self.listener_key) {
+        if let Some(entry) = self.inner.listeners.get(&self.scope) {
             entry.write().retain(|l| l.id != self.id);
         }
     }
 }
 
-// ─── Internal state ──────────────────────────────────────────────────────────
+// ─── Internal storage ────────────────────────────────────────────────────────
 
-struct RegisteredNamespace {
+struct RegisteredOwner {
+    /// Stored so error messages are self-contained without callers needing to
+    /// re-supply namespace/owner on every operation.
+    namespace: String,
+    owner: Vec<String>,
     display_name: String,
+    #[allow(dead_code)]
     description: String,
     entries: HashMap<String, crate::schema::SchemaEntry>,
 }
 
 struct Inner {
-    /// Schema registry — written once at registration, then read-only.
-    namespaces: DashMap<String, RegisteredNamespace>,
+    /// Schema registry — keyed by `compound_key(namespace, owner)`.
+    /// Written once at registration; effectively read-only afterwards.
+    owners: DashMap<String, RegisteredOwner>,
 
-    /// Live values — one inner DashMap per namespace, pre-seeded with defaults.
+    /// Live values — outer key: compound, inner key: setting name.
     values: DashMap<String, DashMap<String, ConfigValue>>,
 
-    /// Listener registry.
-    ///
-    /// Keys:
-    /// - `"ns::key"` — specific-key listeners
-    /// - `"ns::*"`   — namespace-wide listeners
-    /// - `"*"`       — global listeners (all namespaces)
-    listeners: DashMap<String, RwLock<Vec<Listener>>>,
+    /// Listener registry keyed by [`ListenerScope`].
+    listeners: DashMap<ListenerScope, RwLock<Vec<Listener>>>,
 
     next_id: AtomicU64,
 }
 
 impl Inner {
-    /// Collect all matching callbacks (releasing every lock first) then invoke them.
+    /// Fire all callbacks matching the changed setting.
     ///
-    /// Callbacks are called with **no internal locks held**, which means a
-    /// callback is free to call `get` or `set` on the manager without risk of
-    /// deadlock.
+    /// Callbacks are invoked **with no internal locks held**, so listeners may
+    /// safely call `get` or `set` on the manager without risk of deadlock.
     fn fire_change(&self, event: &ChangeEvent) {
-        let mut callbacks: Vec<ListenerCallback> = Vec::new();
+        let compound = compound_key(&event.namespace, &event.owner);
 
-        let keys = [
-            format!("{}::{}", event.namespace, event.key), // specific
-            format!("{}::*", event.namespace),             // namespace-wide
-            "*".to_owned(),                                 // global
+        let scopes = [
+            ListenerScope::Key {
+                compound: compound.clone(),
+                key: event.key.clone(),
+            },
+            ListenerScope::Owner { compound },
+            ListenerScope::Global,
         ];
 
-        for lk in &keys {
-            if let Some(entry) = self.listeners.get(lk) {
-                let guard = entry.read();
-                for l in guard.iter() {
+        let mut callbacks: Vec<ListenerCallback> = Vec::new();
+        for scope in &scopes {
+            if let Some(entry) = self.listeners.get(scope) {
+                for l in entry.read().iter() {
                     callbacks.push(Arc::clone(&l.callback));
                 }
             }
         }
 
-        // All locks released — safe to call user code.
         for cb in callbacks {
             cb(event);
         }
     }
-
-    fn get_value(&self, namespace: &str, key: &str) -> Result<ConfigValue, ConfigError> {
-        if self.namespaces.get(namespace).is_none() {
-            return Err(ConfigError::NamespaceNotFound(namespace.to_owned()));
-        }
-        let ns = self.namespaces.get(namespace).unwrap();
-        if !ns.entries.contains_key(key) {
-            return Err(ConfigError::UnknownKey {
-                namespace: namespace.to_owned(),
-                key: key.to_owned(),
-            });
-        }
-        // Values map is always kept in sync with the schema.
-        let ns_values = self.values.get(namespace).unwrap();
-        Ok(ns_values.get(key).unwrap().clone())
-    }
-
-    fn set_value(
-        &self,
-        namespace: &str,
-        key: &str,
-        value: ConfigValue,
-    ) -> Result<(), ConfigError> {
-        // --- validate key + schema constraints ---------------------------------
-        let (read_only, validation_result) = {
-            let ns = self
-                .namespaces
-                .get(namespace)
-                .ok_or_else(|| ConfigError::NamespaceNotFound(namespace.to_owned()))?;
-            let entry = ns.entries.get(key).ok_or_else(|| ConfigError::UnknownKey {
-                namespace: namespace.to_owned(),
-                key: key.to_owned(),
-            })?;
-
-            (entry.read_only, entry.validate(&value))
-        }; // `ns` dropped here — shard unlocked
-
-        if read_only {
-            return Err(ConfigError::ReadOnly {
-                namespace: namespace.to_owned(),
-                key: key.to_owned(),
-            });
-        }
-        validation_result.map_err(|reason| ConfigError::ValidationFailed {
-            namespace: namespace.to_owned(),
-            key: key.to_owned(),
-            reason,
-        })?;
-
-        // --- write the value ---------------------------------------------------
-        let old_value = {
-            let ns_values = self.values.get(namespace).unwrap();
-            let old = ns_values.get(key).map(|v| v.clone());
-            ns_values.insert(key.to_owned(), value.clone());
-            old
-        }; // `ns_values` dropped — shard unlocked
-
-        // --- notify listeners (no locks held) ----------------------------------
-        self.fire_change(&ChangeEvent {
-            namespace: namespace.to_owned(),
-            key: key.to_owned(),
-            old_value,
-            new_value: value,
-        });
-
-        Ok(())
-    }
-
-    /// Register a listener under `listener_key` and return its ID.
-    fn add_listener(
-        &self,
-        listener_key: String,
-        callback: ListenerCallback,
-    ) -> ListenerId {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.listeners
-            .entry(listener_key.clone())
-            .or_insert_with(|| RwLock::new(Vec::new()))
-            .write()
-            .push(Listener {
-                id,
-                callback,
-            });
-        ListenerId {
-            id,
-            listener_key,
-            inner: Arc::new(Inner {
-                // Share the listener map via a wrapper — see ConfigManager::clone instead.
-                // This field is never used; we rebuild the Arc below.
-                namespaces: DashMap::new(),
-                values: DashMap::new(),
-                listeners: DashMap::new(),
-                next_id: AtomicU64::new(0),
-            }),
-        }
-    }
 }
 
-// ─── ConfigManager ───────────────────────────────────────────────────────────
+// ─── ConfigManager ────────────────────────────────────────────────────────────
 
 /// The root configuration manager.
 ///
-/// Cheap to clone — all clones share the same underlying state.
-/// Typically owned by the engine or application and handed to subsystems.
+/// Cheap to clone — all clones share the same underlying state via `Arc`.
+/// Typically created once and distributed to all subsystems and plugins.
+///
+/// Settings are organised in three tiers:
+///
+/// 1. **Namespace** — top-level scope, e.g. `"editor"` vs `"project"`.
+/// 2. **Owner path** — an N-level slash-delimited path identifying the
+///    subsystem or plugin, e.g. `"subsystem/physics/main"` or
+///    `"plugin/my_plugin/ui"`. Any depth is supported.
+/// 3. **Key** — the individual setting name within the owner's schema.
 ///
 /// # Thread Safety
 ///
 /// `ConfigManager` is `Send + Sync`. All operations use fine-grained shard
-/// locks via [`DashMap`] and [`parking_lot::RwLock`], making concurrent reads
-/// effectively lock-free in the common case.
+/// locks via [`DashMap`] and [`parking_lot::RwLock`]; concurrent reads are
+/// effectively contention-free.
 #[derive(Clone)]
 pub struct ConfigManager {
     inner: Arc<Inner>,
@@ -266,7 +243,7 @@ impl ConfigManager {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Inner {
-                namespaces: DashMap::new(),
+                owners: DashMap::new(),
                 values: DashMap::new(),
                 listeners: DashMap::new(),
                 next_id: AtomicU64::new(1),
@@ -274,55 +251,82 @@ impl ConfigManager {
         }
     }
 
-    // ── Plugin registration ──────────────────────────────────────────────────
+    // ── Registration ─────────────────────────────────────────────────────────
 
-    /// Register a configuration namespace and receive a scoped [`NamespaceHandle`].
+    /// Register a configuration owner and receive a scoped [`OwnerHandle`].
     ///
-    /// This is the primary entry point for plugins. Call once at startup.
+    /// - `namespace` — top-level scope (e.g. `"editor"`).
+    /// - `owner` — slash-delimited path (e.g. `"subsystem/physics/main"`).
+    ///   Any depth is supported.
     ///
-    /// Returns [`ConfigError::NamespaceAlreadyRegistered`] if `id` has already
-    /// been registered.
-    pub fn register_namespace(
+    /// Call once per owner, typically at startup or plugin load time.
+    ///
+    /// # Errors
+    ///
+    /// - [`ConfigError::OwnerAlreadyRegistered`] — this `(namespace, owner)`
+    ///   pair was already registered.
+    /// - [`ConfigError::InvalidIdentifier`] — `namespace` or an owner segment
+    ///   contains a null byte.
+    pub fn register(
         &self,
-        id: impl Into<String>,
+        namespace: &str,
+        owner: &str,
         schema: NamespaceSchema,
-    ) -> Result<NamespaceHandle, ConfigError> {
-        let id: String = id.into();
+    ) -> Result<OwnerHandle, ConfigError> {
+        validate_id(namespace, "namespace")?;
 
-        if self.inner.namespaces.contains_key(&id) {
-            return Err(ConfigError::NamespaceAlreadyRegistered(id));
+        let owner_vec = parse_owner_path(owner);
+        for seg in &owner_vec {
+            validate_id(seg, "owner segment")?;
         }
 
-        // Seed all values from schema defaults.
-        let ns_values: DashMap<String, ConfigValue> = schema
+        let compound = compound_key(namespace, &owner_vec);
+
+        if self.inner.owners.contains_key(&compound) {
+            return Err(ConfigError::OwnerAlreadyRegistered {
+                namespace: namespace.to_owned(),
+                owner: owner_vec,
+            });
+        }
+
+        // Pre-seed all values from schema defaults.
+        let seed: DashMap<String, ConfigValue> = schema
             .entries
             .iter()
             .map(|(k, v)| (k.clone(), v.default.clone()))
             .collect();
-        self.inner.values.insert(id.clone(), ns_values);
+        self.inner.values.insert(compound.clone(), seed);
 
-        self.inner.namespaces.insert(
-            id.clone(),
-            RegisteredNamespace {
+        self.inner.owners.insert(
+            compound.clone(),
+            RegisteredOwner {
+                namespace: namespace.to_owned(),
+                owner: owner_vec.clone(),
                 display_name: schema.display_name,
                 description: schema.description,
                 entries: schema.entries,
             },
         );
 
-        Ok(NamespaceHandle {
-            namespace_id: id,
+        Ok(OwnerHandle {
+            namespace: namespace.to_owned(),
+            owner: owner_vec,
+            compound,
             inner: Arc::clone(&self.inner),
         })
     }
 
-    /// Retrieve a handle to an already-registered namespace.
+    /// Retrieve a handle to an already-registered owner.
     ///
-    /// Useful for cross-plugin reads or if the original handle was not retained.
-    pub fn namespace_handle(&self, id: &str) -> Option<NamespaceHandle> {
-        if self.inner.namespaces.contains_key(id) {
-            Some(NamespaceHandle {
-                namespace_id: id.to_owned(),
+    /// Returns `None` if the `(namespace, owner)` pair is not registered.
+    pub fn owner_handle(&self, namespace: &str, owner: &str) -> Option<OwnerHandle> {
+        let owner_vec = parse_owner_path(owner);
+        let compound = compound_key(namespace, &owner_vec);
+        if self.inner.owners.contains_key(&compound) {
+            Some(OwnerHandle {
+                namespace: namespace.to_owned(),
+                owner: owner_vec,
+                compound,
                 inner: Arc::clone(&self.inner),
             })
         } else {
@@ -330,45 +334,80 @@ impl ConfigManager {
         }
     }
 
-    // ── Cross-namespace reads ────────────────────────────────────────────────
+    // ── Cross-owner reads ─────────────────────────────────────────────────────
 
-    /// Read a value from any registered namespace.
-    pub fn get(&self, namespace: &str, key: &str) -> Result<ConfigValue, ConfigError> {
-        self.inner.get_value(namespace, key)
+    /// Read a value from any registered owner.
+    ///
+    /// This is a read-only cross-owner accessor. To write, use an [`OwnerHandle`].
+    pub fn get(
+        &self,
+        namespace: &str,
+        owner: &str,
+        key: &str,
+    ) -> Result<ConfigValue, ConfigError> {
+        let owner_vec = parse_owner_path(owner);
+        let compound = compound_key(namespace, &owner_vec);
+
+        let owner_data =
+            self.inner
+                .owners
+                .get(&compound)
+                .ok_or_else(|| ConfigError::OwnerNotFound {
+                    namespace: namespace.to_owned(),
+                    owner: owner_vec.clone(),
+                })?;
+
+        if !owner_data.entries.contains_key(key) {
+            return Err(ConfigError::UnknownKey {
+                namespace: namespace.to_owned(),
+                owner: owner_vec,
+                key: key.to_owned(),
+            });
+        }
+        drop(owner_data); // release shard before values lookup
+
+        Ok(self
+            .inner
+            .values
+            .get(&compound)
+            .unwrap()
+            .get(key)
+            .unwrap()
+            .clone())
     }
 
-    // ── Discovery ────────────────────────────────────────────────────────────
+    // ── Discovery ─────────────────────────────────────────────────────────────
 
-    /// Search all namespaces by key name, description text, or tag.
+    /// Search every registered owner by key name, description, or tag.
     ///
     /// The query is matched case-insensitively against all three fields.
     pub fn search(&self, query: &str) -> Vec<SearchResult> {
         let q = query.to_lowercase();
         let mut results = Vec::new();
 
-        for ns_ref in self.inner.namespaces.iter() {
-            let ns_id = ns_ref.key();
-            let ns = ns_ref.value();
+        for owner_ref in self.inner.owners.iter() {
+            let compound = owner_ref.key();
+            let owner_data = owner_ref.value();
 
-            let ns_values = match self.inner.values.get(ns_id) {
-                Some(v) => v,
-                None => continue,
+            let Some(values) = self.inner.values.get(compound) else {
+                continue;
             };
 
-            for (key, entry) in &ns.entries {
+            for (key, entry) in &owner_data.entries {
                 let hit = key.to_lowercase().contains(&q)
                     || entry.description.to_lowercase().contains(&q)
                     || entry.tags.iter().any(|t| t.to_lowercase().contains(&q));
 
                 if hit {
-                    let current_value = ns_values
+                    let current_value = values
                         .get(key)
                         .map(|v| v.clone())
                         .unwrap_or_else(|| entry.default.clone());
 
                     results.push(SearchResult {
-                        namespace_id: ns_id.clone(),
-                        namespace_display_name: ns.display_name.clone(),
+                        namespace: owner_data.namespace.clone(),
+                        owner: owner_data.owner.clone(),
+                        owner_display_name: owner_data.display_name.clone(),
                         key: key.clone(),
                         description: entry.description.clone(),
                         tags: entry.tags.clone(),
@@ -381,44 +420,66 @@ impl ConfigManager {
         results
     }
 
-    /// Return the IDs of all registered namespaces.
+    /// Return every distinct namespace that has at least one registered owner.
     pub fn list_namespaces(&self) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        for entry in self.inner.owners.iter() {
+            seen.insert(entry.value().namespace.clone());
+        }
+        seen.into_iter().collect()
+    }
+
+    /// Return the owner paths of every owner registered under `namespace`.
+    pub fn list_owners(&self, namespace: &str) -> Vec<Vec<String>> {
         self.inner
-            .namespaces
+            .owners
             .iter()
-            .map(|e| e.key().clone())
+            .filter(|e| e.value().namespace == namespace)
+            .map(|e| e.value().owner.clone())
             .collect()
     }
 
-    /// Return metadata and current values for every key in a namespace.
-    ///
-    /// Returns `None` if the namespace is not registered.
-    pub fn list_settings(&self, namespace: &str) -> Option<Vec<SettingInfo>> {
-        let ns = self.inner.namespaces.get(namespace)?;
-        let ns_values = self.inner.values.get(namespace)?;
-
-        let infos = ns
-            .entries
+    /// Return every `(namespace, owner_segments)` pair registered in the manager.
+    pub fn list_all_owners(&self) -> Vec<(String, Vec<String>)> {
+        self.inner
+            .owners
             .iter()
-            .map(|(key, entry)| SettingInfo {
-                key: key.clone(),
-                description: entry.description.clone(),
-                current_value: ns_values
-                    .get(key)
-                    .map(|v| v.clone())
-                    .unwrap_or_else(|| entry.default.clone()),
-                default_value: entry.default.clone(),
-                tags: entry.tags.clone(),
-                read_only: entry.read_only,
-            })
-            .collect();
-
-        Some(infos)
+            .map(|e| (e.value().namespace.clone(), e.value().owner.clone()))
+            .collect()
     }
 
-    // ── Global listeners ─────────────────────────────────────────────────────
+    /// Return metadata and current values for every key belonging to an owner.
+    ///
+    /// Returns `None` if the `(namespace, owner)` pair is not registered.
+    pub fn list_settings(&self, namespace: &str, owner: &str) -> Option<Vec<SettingInfo>> {
+        let owner_vec = parse_owner_path(owner);
+        let compound = compound_key(namespace, &owner_vec);
 
-    /// Subscribe to **every** value change across all namespaces.
+        let owner_data = self.inner.owners.get(&compound)?;
+        let values = self.inner.values.get(&compound)?;
+
+        Some(
+            owner_data
+                .entries
+                .iter()
+                .map(|(key, entry)| SettingInfo {
+                    key: key.clone(),
+                    description: entry.description.clone(),
+                    current_value: values
+                        .get(key)
+                        .map(|v| v.clone())
+                        .unwrap_or_else(|| entry.default.clone()),
+                    default_value: entry.default.clone(),
+                    tags: entry.tags.clone(),
+                    read_only: entry.read_only,
+                })
+                .collect(),
+        )
+    }
+
+    // ── Global listeners ──────────────────────────────────────────────────────
+
+    /// Subscribe to **every** value change across all namespaces and owners.
     ///
     /// The returned [`ListenerId`] removes the listener when dropped.
     pub fn on_any_change<F>(&self, callback: F) -> ListenerId
@@ -426,10 +487,9 @@ impl ConfigManager {
         F: Fn(&ChangeEvent) + Send + Sync + 'static,
     {
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
-        let key = "*".to_owned();
         self.inner
             .listeners
-            .entry(key.clone())
+            .entry(ListenerScope::Global)
             .or_insert_with(|| RwLock::new(Vec::new()))
             .write()
             .push(Listener {
@@ -438,7 +498,7 @@ impl ConfigManager {
             });
         ListenerId {
             id,
-            listener_key: key,
+            scope: ListenerScope::Global,
             inner: Arc::clone(&self.inner),
         }
     }
@@ -450,32 +510,88 @@ impl Default for ConfigManager {
     }
 }
 
-// ─── NamespaceHandle ─────────────────────────────────────────────────────────
+// ─── OwnerHandle ─────────────────────────────────────────────────────────────
 
-/// A scoped handle to one registered configuration namespace.
+/// A scoped handle to one registered `(namespace, owner)` pair.
 ///
-/// Plugins receive this from [`ConfigManager::register_namespace`] and use it
-/// for all subsequent reads, writes, and listener registrations.
+/// Plugins receive this from [`ConfigManager::register`] and use it for all
+/// subsequent reads, writes, and listener registrations within their scope.
 ///
-/// Handles are cheap to clone and share across threads — all copies are backed
-/// by the same `Arc<Inner>`.
+/// Handles are cheap to clone — all copies share the same `Arc<Inner>`.
+///
+/// Address hierarchy:
+///
+/// ```text
+/// namespace  ("editor")
+///   └── owner path  ("subsystem/physics/main")   ← any depth
+///         └── key   ("gravity")
+/// ```
 #[derive(Clone)]
-pub struct NamespaceHandle {
-    namespace_id: String,
+pub struct OwnerHandle {
+    namespace: String,
+    /// Individual path segments, e.g. `["subsystem", "physics", "main"]`.
+    owner: Vec<String>,
+    /// Cached `compound_key(namespace, owner)` — avoids recomputation on reads.
+    compound: String,
     inner: Arc<Inner>,
 }
 
-impl NamespaceHandle {
-    /// The namespace ID this handle is scoped to.
-    pub fn namespace_id(&self) -> &str {
-        &self.namespace_id
+impl OwnerHandle {
+    /// The top-level namespace this handle is scoped to.
+    pub fn namespace(&self) -> &str {
+        &self.namespace
     }
 
-    // ── Reads ────────────────────────────────────────────────────────────────
+    /// The owner path segments this handle is scoped to.
+    pub fn owner(&self) -> &[String] {
+        &self.owner
+    }
 
-    /// Read any value from this namespace.
+    /// The owner path as a slash-joined string (e.g. `"subsystem/physics/main"`).
+    pub fn owner_path(&self) -> String {
+        self.owner.join("/")
+    }
+
+    // ── Private helpers ───────────────────────────────────────────────────────
+
+    fn owner_not_found(&self) -> ConfigError {
+        ConfigError::OwnerNotFound {
+            namespace: self.namespace.clone(),
+            owner: self.owner.clone(),
+        }
+    }
+
+    fn unknown_key(&self, key: &str) -> ConfigError {
+        ConfigError::UnknownKey {
+            namespace: self.namespace.clone(),
+            owner: self.owner.clone(),
+            key: key.to_owned(),
+        }
+    }
+
+    // ── Reads ─────────────────────────────────────────────────────────────────
+
+    /// Read any value from this owner's settings.
     pub fn get(&self, key: &str) -> Result<ConfigValue, ConfigError> {
-        self.inner.get_value(&self.namespace_id, key)
+        let owner_data = self
+            .inner
+            .owners
+            .get(&self.compound)
+            .ok_or_else(|| self.owner_not_found())?;
+
+        if !owner_data.entries.contains_key(key) {
+            return Err(self.unknown_key(key));
+        }
+        drop(owner_data);
+
+        Ok(self
+            .inner
+            .values
+            .get(&self.compound)
+            .unwrap()
+            .get(key)
+            .unwrap()
+            .clone())
     }
 
     /// Read a `bool` value.
@@ -503,43 +619,94 @@ impl NamespaceHandle {
         self.get(key)?.as_color()
     }
 
-    // ── Writes ───────────────────────────────────────────────────────────────
+    // ── Writes ────────────────────────────────────────────────────────────────
 
     /// Write a value. The value must pass all validators declared in the schema.
     ///
-    /// Accepts any type that implements `Into<ConfigValue>` (e.g. `true`,
-    /// `42_i64`, `"medium"`, [`Color`]).
+    /// Accepts any type that implements `Into<ConfigValue>` — e.g. `true`,
+    /// `42_i64`, `"medium"`, [`Color`].
     pub fn set(&self, key: &str, value: impl Into<ConfigValue>) -> Result<(), ConfigError> {
-        self.inner
-            .set_value(&self.namespace_id, key, value.into())
+        let value = value.into();
+
+        // --- validate (shard locked) -----------------------------------------
+        let (read_only, validation_result) = {
+            let owner_data = self
+                .inner
+                .owners
+                .get(&self.compound)
+                .ok_or_else(|| self.owner_not_found())?;
+
+            let entry = owner_data
+                .entries
+                .get(key)
+                .ok_or_else(|| self.unknown_key(key))?;
+
+            (entry.read_only, entry.validate(&value))
+        }; // shard lock released
+
+        if read_only {
+            return Err(ConfigError::ReadOnly {
+                namespace: self.namespace.clone(),
+                owner: self.owner.clone(),
+                key: key.to_owned(),
+            });
+        }
+
+        validation_result.map_err(|reason| ConfigError::ValidationFailed {
+            namespace: self.namespace.clone(),
+            owner: self.owner.clone(),
+            key: key.to_owned(),
+            reason,
+        })?;
+
+        // --- write (shard locked) --------------------------------------------
+        let old_value = {
+            let values = self.inner.values.get(&self.compound).unwrap();
+            let old = values.get(key).map(|v| v.clone());
+            values.insert(key.to_owned(), value.clone());
+            old
+        }; // shard lock released
+
+        // --- notify (no locks held) ------------------------------------------
+        self.inner.fire_change(&ChangeEvent {
+            namespace: self.namespace.clone(),
+            owner: self.owner.clone(),
+            key: key.to_owned(),
+            old_value,
+            new_value: value,
+        });
+
+        Ok(())
     }
 
     /// Reset a setting to its schema-defined default, firing change listeners.
     ///
-    /// Works even on read-only settings (since the default is authoritative).
+    /// Works even on read-only settings — the schema default is always
+    /// authoritative.
     pub fn reset_to_default(&self, key: &str) -> Result<(), ConfigError> {
         let default = {
-            let ns = self
+            let owner_data = self
                 .inner
-                .namespaces
-                .get(&self.namespace_id)
-                .ok_or_else(|| ConfigError::NamespaceNotFound(self.namespace_id.clone()))?;
-            let entry = ns.entries.get(key).ok_or_else(|| ConfigError::UnknownKey {
-                namespace: self.namespace_id.clone(),
-                key: key.to_owned(),
-            })?;
+                .owners
+                .get(&self.compound)
+                .ok_or_else(|| self.owner_not_found())?;
+            let entry = owner_data
+                .entries
+                .get(key)
+                .ok_or_else(|| self.unknown_key(key))?;
             entry.default.clone()
-        }; // `ns` dropped — shard unlocked
+        }; // shard lock released
 
         let old_value = {
-            let ns_values = self.inner.values.get(&self.namespace_id).unwrap();
-            let old = ns_values.get(key).map(|v| v.clone());
-            ns_values.insert(key.to_owned(), default.clone());
+            let values = self.inner.values.get(&self.compound).unwrap();
+            let old = values.get(key).map(|v| v.clone());
+            values.insert(key.to_owned(), default.clone());
             old
-        }; // `ns_values` dropped — shard unlocked
+        }; // shard lock released
 
         self.inner.fire_change(&ChangeEvent {
-            namespace: self.namespace_id.clone(),
+            namespace: self.namespace.clone(),
+            owner: self.owner.clone(),
             key: key.to_owned(),
             old_value,
             new_value: default,
@@ -548,9 +715,9 @@ impl NamespaceHandle {
         Ok(())
     }
 
-    // ── Listeners ────────────────────────────────────────────────────────────
+    // ── Listeners ─────────────────────────────────────────────────────────────
 
-    /// Subscribe to changes for a single key in this namespace.
+    /// Subscribe to changes for a single key within this owner.
     ///
     /// Returns [`ConfigError::UnknownKey`] if `key` is not in the schema.
     /// The listener is removed automatically when the returned [`ListenerId`]
@@ -559,27 +726,26 @@ impl NamespaceHandle {
     where
         F: Fn(&ChangeEvent) + Send + Sync + 'static,
     {
-        // Validate that the key is in the schema.
         {
-            let ns = self
+            let owner_data = self
                 .inner
-                .namespaces
-                .get(&self.namespace_id)
-                .ok_or_else(|| ConfigError::NamespaceNotFound(self.namespace_id.clone()))?;
-            if !ns.entries.contains_key(key) {
-                return Err(ConfigError::UnknownKey {
-                    namespace: self.namespace_id.clone(),
-                    key: key.to_owned(),
-                });
+                .owners
+                .get(&self.compound)
+                .ok_or_else(|| self.owner_not_found())?;
+            if !owner_data.entries.contains_key(key) {
+                return Err(self.unknown_key(key));
             }
         }
 
-        let listener_key = format!("{}::{}", self.namespace_id, key);
+        let scope = ListenerScope::Key {
+            compound: self.compound.clone(),
+            key: key.to_owned(),
+        };
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
 
         self.inner
             .listeners
-            .entry(listener_key.clone())
+            .entry(scope.clone())
             .or_insert_with(|| RwLock::new(Vec::new()))
             .write()
             .push(Listener {
@@ -589,25 +755,27 @@ impl NamespaceHandle {
 
         Ok(ListenerId {
             id,
-            listener_key,
+            scope,
             inner: Arc::clone(&self.inner),
         })
     }
 
-    /// Subscribe to **all** changes in this namespace.
+    /// Subscribe to **all** changes within this owner's settings.
     ///
-    /// Useful for persistence layers or debugging. The listener is removed
-    /// automatically when the returned [`ListenerId`] is dropped.
+    /// The listener is removed automatically when the returned [`ListenerId`]
+    /// is dropped.
     pub fn on_any_change<F>(&self, callback: F) -> ListenerId
     where
         F: Fn(&ChangeEvent) + Send + Sync + 'static,
     {
-        let listener_key = format!("{}::*", self.namespace_id);
+        let scope = ListenerScope::Owner {
+            compound: self.compound.clone(),
+        };
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
 
         self.inner
             .listeners
-            .entry(listener_key.clone())
+            .entry(scope.clone())
             .or_insert_with(|| RwLock::new(Vec::new()))
             .write()
             .push(Listener {
@@ -617,28 +785,29 @@ impl NamespaceHandle {
 
         ListenerId {
             id,
-            listener_key,
+            scope,
             inner: Arc::clone(&self.inner),
         }
     }
 
-    // ── Discovery ────────────────────────────────────────────────────────────
+    // ── Discovery ─────────────────────────────────────────────────────────────
 
-    /// Return metadata and current values for every key in this namespace.
+    /// Return metadata and current values for every key in this owner's schema.
     pub fn list_settings(&self) -> Vec<SettingInfo> {
-        let Some(ns) = self.inner.namespaces.get(&self.namespace_id) else {
+        let Some(owner_data) = self.inner.owners.get(&self.compound) else {
             return Vec::new();
         };
-        let Some(ns_values) = self.inner.values.get(&self.namespace_id) else {
+        let Some(values) = self.inner.values.get(&self.compound) else {
             return Vec::new();
         };
 
-        ns.entries
+        owner_data
+            .entries
             .iter()
             .map(|(key, entry)| SettingInfo {
                 key: key.clone(),
                 description: entry.description.clone(),
-                current_value: ns_values
+                current_value: values
                     .get(key)
                     .map(|v| v.clone())
                     .unwrap_or_else(|| entry.default.clone()),
@@ -650,7 +819,7 @@ impl NamespaceHandle {
     }
 }
 
-// ─── Tests ───────────────────────────────────────────────────────────────────
+// ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -667,57 +836,66 @@ mod tests {
         value::ConfigValue,
     };
 
-    fn make_manager() -> (ConfigManager, NamespaceHandle) {
+    fn make_manager() -> (ConfigManager, OwnerHandle) {
         let manager = ConfigManager::new();
-        let schema = NamespaceSchema::new("Test Plugin", "A test plugin namespace")
+        let schema = NamespaceSchema::new("Physics", "Physics subsystem settings")
             .setting(
-                "count",
-                SchemaEntry::new("Item count", 42_i64)
-                    .validator(Validator::int_range(0, 100)),
+                "gravity",
+                SchemaEntry::new("Gravitational acceleration", 9.81_f64)
+                    .validator(Validator::float_range(0.0, 100.0)),
             )
             .setting(
-                "name",
-                SchemaEntry::new("Plugin name", "default")
-                    .validator(Validator::string_max_length(50)),
+                "solver",
+                SchemaEntry::new("Solver preset", "medium")
+                    .validator(Validator::string_one_of(["fast", "medium", "accurate"])),
             )
-            .setting("enabled", SchemaEntry::new("Plugin enabled", true))
+            .setting("enabled", SchemaEntry::new("Enable physics", true))
             .setting(
-                "quality",
-                SchemaEntry::new("Quality preset", "high")
-                    .validator(Validator::string_one_of(["low", "medium", "high", "ultra"])),
+                "version",
+                SchemaEntry::new("Physics engine version", "2.0.0").read_only(),
             );
-        let handle = manager.register_namespace("test", schema).unwrap();
+
+        let handle = manager
+            .register("editor", "subsystem/physics/main", schema)
+            .unwrap();
         (manager, handle)
+    }
+
+    #[test]
+    fn namespace_and_owner_accessible_on_handle() {
+        let (_, h) = make_manager();
+        assert_eq!(h.namespace(), "editor");
+        assert_eq!(h.owner(), &["subsystem", "physics", "main"]);
+        assert_eq!(h.owner_path(), "subsystem/physics/main");
     }
 
     #[test]
     fn defaults_are_readable() {
         let (_, h) = make_manager();
-        assert_eq!(h.get_int("count").unwrap(), 42);
-        assert_eq!(h.get_string("name").unwrap(), "default");
+        assert!((h.get_float("gravity").unwrap() - 9.81).abs() < 1e-9);
+        assert_eq!(h.get_string("solver").unwrap(), "medium");
         assert!(h.get_bool("enabled").unwrap());
     }
 
     #[test]
     fn set_and_get() {
         let (_, h) = make_manager();
-        h.set("count", 77_i64).unwrap();
-        assert_eq!(h.get_int("count").unwrap(), 77);
+        h.set("gravity", 1.62_f64).unwrap();
+        assert!((h.get_float("gravity").unwrap() - 1.62).abs() < 1e-9);
     }
 
     #[test]
     fn validation_rejects_out_of_range() {
         let (_, h) = make_manager();
-        assert!(h.set("count", 200_i64).is_err());
-        // Value must not have changed.
-        assert_eq!(h.get_int("count").unwrap(), 42);
+        assert!(h.set("gravity", 9999.0_f64).is_err());
+        assert!((h.get_float("gravity").unwrap() - 9.81).abs() < 1e-9);
     }
 
     #[test]
     fn validation_rejects_unknown_option() {
         let (_, h) = make_manager();
-        assert!(h.set("quality", "extreme").is_err());
-        assert_eq!(h.get_string("quality").unwrap(), "high");
+        assert!(h.set("solver", "turbo").is_err());
+        assert_eq!(h.get_string("solver").unwrap(), "medium");
     }
 
     #[test]
@@ -730,15 +908,38 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_namespace_returns_error() {
+    fn duplicate_owner_returns_error() {
         let manager = ConfigManager::new();
         let s1 = NamespaceSchema::new("A", "a").setting("k", SchemaEntry::new("v", 1_i64));
         let s2 = NamespaceSchema::new("A", "a").setting("k", SchemaEntry::new("v", 1_i64));
-        assert!(manager.register_namespace("ns", s1).is_ok());
+        assert!(manager.register("ns", "owner/path", s1).is_ok());
         assert!(matches!(
-            manager.register_namespace("ns", s2),
-            Err(ConfigError::NamespaceAlreadyRegistered(_))
+            manager.register("ns", "owner/path", s2),
+            Err(ConfigError::OwnerAlreadyRegistered { .. })
         ));
+    }
+
+    #[test]
+    fn different_namespaces_same_owner_path_coexist() {
+        let manager = ConfigManager::new();
+        let s1 = NamespaceSchema::new("A", "a").setting("x", SchemaEntry::new("v", 1_i64));
+        let s2 = NamespaceSchema::new("B", "b").setting("x", SchemaEntry::new("v", 2_i64));
+        let h1 = manager.register("editor", "subsystem/audio", s1).unwrap();
+        let h2 = manager.register("project", "subsystem/audio", s2).unwrap();
+        h1.set("x", 10_i64).unwrap();
+        h2.set("x", 20_i64).unwrap();
+        assert_eq!(h1.get_int("x").unwrap(), 10);
+        assert_eq!(h2.get_int("x").unwrap(), 20);
+    }
+
+    #[test]
+    fn n_level_deep_owner_path() {
+        let manager = ConfigManager::new();
+        let schema =
+            NamespaceSchema::new("Deep", "").setting("v", SchemaEntry::new("", 42_i64));
+        let h = manager.register("editor", "a/b/c/d/e/f", schema).unwrap();
+        assert_eq!(h.owner(), &["a", "b", "c", "d", "e", "f"]);
+        assert_eq!(h.get_int("v").unwrap(), 42);
     }
 
     #[test]
@@ -746,18 +947,35 @@ mod tests {
         let (_, h) = make_manager();
         let received: Arc<Mutex<Vec<ConfigValue>>> = Arc::new(Mutex::new(Vec::new()));
         let rx = Arc::clone(&received);
-
         let _guard = h
-            .on_change("count", move |e| rx.lock().push(e.new_value.clone()))
+            .on_change("gravity", move |e| rx.lock().push(e.new_value.clone()))
             .unwrap();
-
-        h.set("count", 10_i64).unwrap();
-        h.set("count", 20_i64).unwrap();
-
+        h.set("gravity", 1.0_f64).unwrap();
+        h.set("gravity", 2.0_f64).unwrap();
         let values = received.lock();
         assert_eq!(values.len(), 2);
-        assert_eq!(values[0], ConfigValue::Int(10));
-        assert_eq!(values[1], ConfigValue::Int(20));
+        assert_eq!(values[0], ConfigValue::Float(1.0));
+        assert_eq!(values[1], ConfigValue::Float(2.0));
+    }
+
+    #[test]
+    fn listener_carries_owner_path() {
+        let (_, h) = make_manager();
+        let captured: Arc<Mutex<Option<Vec<String>>>> = Arc::new(Mutex::new(None));
+        let cap = Arc::clone(&captured);
+        let _guard = h
+            .on_change("gravity", move |e| {
+                *cap.lock() = Some(e.owner.clone());
+            })
+            .unwrap();
+        h.set("gravity", 5.0_f64).unwrap();
+        let locked = captured.lock();
+        let got: &[String] = locked.as_deref().unwrap();
+        let expected: &[&str] = &["subsystem", "physics", "main"];
+        assert_eq!(got.len(), expected.len());
+        for (a, b) in got.iter().zip(expected.iter()) {
+            assert_eq!(a.as_str(), *b);
+        }
     }
 
     #[test]
@@ -765,56 +983,71 @@ mod tests {
         let (_, h) = make_manager();
         let count = Arc::new(AtomicU64::new(0));
         let c = Arc::clone(&count);
-
         {
             let _guard = h
-                .on_change("count", move |_| {
+                .on_change("gravity", move |_| {
                     c.fetch_add(1, Ordering::Relaxed);
                 })
                 .unwrap();
-            h.set("count", 10_i64).unwrap(); // fires
-        } // _guard dropped — listener removed
-
-        h.set("count", 20_i64).unwrap(); // must not fire
+            h.set("gravity", 1.0_f64).unwrap();
+        }
+        h.set("gravity", 2.0_f64).unwrap();
         assert_eq!(count.load(Ordering::Relaxed), 1);
     }
 
     #[test]
-    fn namespace_wide_listener() {
+    fn owner_wide_listener() {
         let (_, h) = make_manager();
         let keys: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let ks = Arc::clone(&keys);
-
         let _guard = h.on_any_change(move |e| ks.lock().push(e.key.clone()));
-
-        h.set("count", 1_i64).unwrap();
+        h.set("gravity", 1.0_f64).unwrap();
         h.set("enabled", false).unwrap();
-
         let k = keys.lock();
-        assert!(k.contains(&"count".to_owned()));
+        assert!(k.contains(&"gravity".to_owned()));
         assert!(k.contains(&"enabled".to_owned()));
     }
 
     #[test]
     fn reset_to_default() {
         let (_, h) = make_manager();
-        h.set("count", 99_i64).unwrap();
-        h.reset_to_default("count").unwrap();
-        assert_eq!(h.get_int("count").unwrap(), 42);
+        h.set("gravity", 1.62_f64).unwrap();
+        h.reset_to_default("gravity").unwrap();
+        assert!((h.get_float("gravity").unwrap() - 9.81).abs() < 1e-9);
     }
 
     #[test]
-    fn cross_namespace_read_via_manager() {
+    fn cross_owner_read_via_manager() {
         let (manager, _) = make_manager();
-        let v = manager.get("test", "count").unwrap();
-        assert_eq!(v, ConfigValue::Int(42));
+        let v = manager
+            .get("editor", "subsystem/physics/main", "gravity")
+            .unwrap();
+        assert_eq!(v, ConfigValue::Float(9.81));
+    }
+
+    #[test]
+    fn owner_not_found_via_manager() {
+        let manager = ConfigManager::new();
+        assert!(matches!(
+            manager.get("editor", "does/not/exist", "key"),
+            Err(ConfigError::OwnerNotFound { .. })
+        ));
     }
 
     #[test]
     fn search_finds_by_key() {
         let (manager, _) = make_manager();
-        let results = manager.search("count");
-        assert!(results.iter().any(|r| r.key == "count"));
+        let results = manager.search("gravity");
+        assert!(results.iter().any(|r| r.key == "gravity"));
+    }
+
+    #[test]
+    fn search_result_carries_owner_path() {
+        let (manager, _) = make_manager();
+        let results = manager.search("gravity");
+        let r = results.iter().find(|r| r.key == "gravity").unwrap();
+        assert_eq!(r.namespace, "editor");
+        assert_eq!(r.owner, ["subsystem", "physics", "main"]);
     }
 
     #[test]
@@ -824,49 +1057,72 @@ mod tests {
             "shadows",
             SchemaEntry::new("Enable shadows", true).tag("graphics"),
         );
-        manager.register_namespace("renderer", schema).unwrap();
-
+        manager.register("editor", "renderer/shadows", schema).unwrap();
         let results = manager.search("graphics");
         assert!(!results.is_empty());
     }
 
     #[test]
-    fn global_listener_fires_for_all_namespaces() {
+    fn list_namespaces_deduplicates() {
         let manager = ConfigManager::new();
-        let s1 = NamespaceSchema::new("A", "").setting("x", SchemaEntry::new("", 0_i64));
-        let s2 = NamespaceSchema::new("B", "").setting("y", SchemaEntry::new("", 0_i64));
+        let s =
+            || NamespaceSchema::new("X", "").setting("k", SchemaEntry::new("", 0_i64));
+        manager.register("editor", "a", s()).unwrap();
+        manager.register("editor", "b", s()).unwrap();
+        manager.register("project", "a", s()).unwrap();
+        let mut ns = manager.list_namespaces();
+        ns.sort();
+        assert_eq!(ns, ["editor", "project"]);
+    }
 
-        let h1 = manager.register_namespace("ns_a", s1).unwrap();
-        let h2 = manager.register_namespace("ns_b", s2).unwrap();
+    #[test]
+    fn list_owners_scoped_to_namespace() {
+        let manager = ConfigManager::new();
+        let s =
+            || NamespaceSchema::new("X", "").setting("k", SchemaEntry::new("", 0_i64));
+        manager.register("editor", "a/b", s()).unwrap();
+        manager.register("editor", "a/c", s()).unwrap();
+        manager.register("project", "a/b", s()).unwrap();
+        let owners = manager.list_owners("editor");
+        assert_eq!(owners.len(), 2);
+    }
 
+    #[test]
+    fn global_listener_fires_for_all_owners() {
+        let manager = ConfigManager::new();
+        let s = |v: i64| NamespaceSchema::new("X", "").setting("x", SchemaEntry::new("", v));
+        let h1 = manager.register("editor", "a", s(0)).unwrap();
+        let h2 = manager.register("project", "b", s(0)).unwrap();
         let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let ev = Arc::clone(&events);
         let _guard = manager.on_any_change(move |e| {
-            ev.lock().push(format!("{}::{}", e.namespace, e.key));
+            ev.lock().push(format!("{}:{}", e.namespace, e.owner_path()));
         });
-
         h1.set("x", 1_i64).unwrap();
-        h2.set("y", 2_i64).unwrap();
-
+        h2.set("x", 2_i64).unwrap();
         let e = events.lock();
-        assert!(e.contains(&"ns_a::x".to_owned()));
-        assert!(e.contains(&"ns_b::y".to_owned()));
+        assert!(e.contains(&"editor:a".to_owned()));
+        assert!(e.contains(&"project:b".to_owned()));
     }
 
     #[test]
     fn read_only_rejects_set() {
-        let manager = ConfigManager::new();
-        let schema = NamespaceSchema::new("Engine", "Engine internals").setting(
-            "version",
-            SchemaEntry::new("Engine version string", "1.0.0").read_only(),
-        );
-        let handle = manager.register_namespace("engine", schema).unwrap();
-
+        let (_, handle) = make_manager();
         assert!(matches!(
-            handle.set("version", "2.0.0"),
+            handle.set("version", "3.0.0"),
             Err(ConfigError::ReadOnly { .. })
         ));
-        // reset_to_default must still work
         assert!(handle.reset_to_default("version").is_ok());
+    }
+
+    #[test]
+    fn owner_handle_retrieval() {
+        let manager = ConfigManager::new();
+        let schema =
+            NamespaceSchema::new("A", "").setting("k", SchemaEntry::new("", 7_i64));
+        manager.register("ns", "a/b/c", schema).unwrap();
+        let h = manager.owner_handle("ns", "a/b/c").unwrap();
+        assert_eq!(h.get_int("k").unwrap(), 7);
+        assert!(manager.owner_handle("ns", "x/y/z").is_none());
     }
 }
