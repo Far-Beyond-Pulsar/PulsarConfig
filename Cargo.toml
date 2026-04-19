@@ -10,6 +10,6 @@ categories = ["config", "data-structures", "concurrency"]
 [dependencies]
 dashmap = "6"
 parking_lot = "0.12"
+dirs = "5"
+toml = "0.8"
 
-[dev-dependencies]
-# parking_lot is already a main dep; listed here for clarity in tests

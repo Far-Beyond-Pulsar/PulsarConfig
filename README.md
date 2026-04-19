@@ -245,18 +245,133 @@ impl RenderPlugin {
 
 ---
 
+## Persistence
+
+`ConfigStore` wraps a `ConfigManager` and serializes each namespace to a separate human-editable TOML file. The config directory is resolved automatically via the OS convention.
+
+### Platform paths
+
+| Platform | Default location |
+|----------|-----------------|
+| Linux    | `~/.config/<app_name>/` |
+| macOS    | `~/Library/Application Support/<app_name>/` |
+| Windows  | `%APPDATA%\<app_name>\` |
+
+### File layout
+
+One `.toml` file per namespace, named after the namespace ID:
+
+```
+~/.config/my_game/
+  renderer.shadows.toml
+  audio.toml
+  input.toml
+```
+
+### Example file
+
+```toml
+# PulsarConfig — renderer.shadows
+# Edit this file to override application defaults.
+# Missing keys fall back to the schema default.
+# Read-only settings are managed by the application and are not listed here.
+
+enabled = true
+max_distance = 1000.0
+quality = "high"
+
+[tint]
+r = 0
+g = 0
+b = 0
+a = 128
+```
+
+### Usage
+
+```rust
+use pulsar_config::{ConfigManager, ConfigStore, NamespaceSchema, SchemaEntry, Validator, Color};
+
+let manager = ConfigManager::new();
+
+// Register namespaces as usual.
+let audio_schema = NamespaceSchema::new("Audio", "Audio engine settings")
+    .setting("master_volume", SchemaEntry::new("Master volume (0–100)", 80_i64)
+        .validator(Validator::int_range(0, 100)))
+    .setting("reverb", SchemaEntry::new("Enable reverb", true));
+
+let shadows_schema = NamespaceSchema::new("Shadows", "Shadow rendering settings")
+    .setting("enabled", SchemaEntry::new("Enable shadows", true))
+    .setting("tint", SchemaEntry::new("Shadow tint color", Color::rgba(0, 0, 0, 128)));
+
+let audio   = manager.register_namespace("audio", audio_schema).unwrap();
+let shadows = manager.register_namespace("renderer.shadows", shadows_schema).unwrap();
+
+// Wrap the manager in a ConfigStore.
+let store = ConfigStore::new(manager, "my_game").unwrap();
+
+// On startup: load persisted overrides on top of schema defaults.
+// Returns Ok(false) on first run — schema defaults are used transparently.
+store.load(&audio).unwrap();
+store.load(&shadows).unwrap();
+
+// Or load all handles at once. Returns the IDs with no persisted file yet.
+let first_run_ids = store.load_all([&audio, &shadows]).unwrap();
+
+// ... application runs ...
+
+// On shutdown: save all namespaces.
+store.save_all().unwrap();
+
+// Or save a single namespace (e.g. after a settings screen is closed).
+store.save("audio").unwrap();
+```
+
+### Alternative: explicit config directory
+
+For portable or embedded deployments:
+
+```rust
+let store = ConfigStore::with_dir(manager, "./config").unwrap();
+```
+
+### Resilience guarantees
+
+| Situation | Behaviour |
+|-----------|-----------|
+| No file (first run) | Schema defaults used; `load` returns `false` |
+| Key in file, not in schema | Silently skipped (schema change between versions) |
+| Key in schema, not in file | Schema default retained (new setting added) |
+| Type mismatch in file | Silently skipped; schema default retained |
+| Value fails validation | Silently skipped; schema default retained |
+| Read-only setting | Never written to file; always sourced from schema |
+
+---
+
 ## Error Handling
 
-All fallible operations return `Result<_, ConfigError>`. Errors are structured, not stringly-typed:
+All fallible operations return a typed `Result`. Config operations use `ConfigError`; persistence operations use `PersistError`.
 
-| Error | When |
-|-------|------|
+### `ConfigError`
+
+| Variant | When |
+|---------|------|
 | `NamespaceAlreadyRegistered(id)` | Registering a namespace ID that already exists |
 | `NamespaceNotFound(id)` | Accessing an unregistered namespace |
 | `UnknownKey { namespace, key }` | Key not declared in the schema |
 | `ValidationFailed { namespace, key, reason }` | One or more validators rejected the value |
 | `ReadOnly { namespace, key }` | Writing to a key marked `.read_only()` |
 | `TypeMismatch { expected, got }` | Typed accessor called on the wrong variant |
+
+### `PersistError`
+
+| Variant | When |
+|---------|------|
+| `NoPlatformConfigDir` | `$HOME` (or equivalent) is unset — config dir cannot be determined |
+| `Io(e)` | File read or write failed |
+| `TomlParse(e)` | The `.toml` file contains invalid TOML |
+| `TomlSerialize(e)` | A value could not be converted to TOML (extremely rare) |
+| `Config(e)` | A `ConfigError` occurred while applying a loaded value |
 
 ---
 

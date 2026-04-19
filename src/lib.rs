@@ -124,10 +124,12 @@
 
 pub mod error;
 pub mod manager;
+pub mod persist;
 pub mod schema;
 pub mod value;
 
 pub use error::ConfigError;
 pub use manager::{ChangeEvent, ConfigManager, ListenerId, NamespaceHandle, SearchResult, SettingInfo};
+pub use persist::{ConfigStore, PersistError};
 pub use schema::{NamespaceSchema, SchemaEntry, Validator, ValidatorFn};
 pub use value::{Color, ConfigValue};
