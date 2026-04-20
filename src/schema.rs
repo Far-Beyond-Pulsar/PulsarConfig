@@ -3,6 +3,56 @@ use std::sync::Arc;
 
 use crate::value::ConfigValue;
 
+// ─── UI field metadata ────────────────────────────────────────────────────────
+
+/// An option in a [`FieldType::Dropdown`] control.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DropdownOption {
+    pub label: String,
+    pub value: String,
+}
+
+impl DropdownOption {
+    pub fn new(label: impl Into<String>, value: impl Into<String>) -> Self {
+        Self { label: label.into(), value: value.into() }
+    }
+    /// Shorthand when the label and the value are the same string.
+    pub fn same(s: impl Into<String>) -> Self {
+        let s = s.into();
+        Self { label: s.clone(), value: s }
+    }
+}
+
+/// Hint to a settings UI about which widget to render for a key.
+///
+/// This is **optional metadata** — the config system does not use it
+/// internally. Pass it via [`SchemaEntry::field_type`] so that settings-screen
+/// code can render the appropriate control without needing a parallel registry.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FieldType {
+    /// A boolean toggle / checkbox.
+    Checkbox,
+    /// A numeric text input with optional bounds.
+    NumberInput {
+        min: Option<f64>,
+        max: Option<f64>,
+        step: Option<f64>,
+    },
+    /// A free-text input field.
+    TextInput {
+        placeholder: Option<String>,
+        multiline: bool,
+    },
+    /// A dropdown / select widget backed by an explicit option list.
+    Dropdown { options: Vec<DropdownOption> },
+    /// A draggable slider with explicit bounds.
+    Slider { min: f64, max: f64, step: f64 },
+    /// An RGBA color picker.
+    ColorPicker,
+    /// A file/directory path chooser.
+    PathSelector { directory: bool },
+}
+
 /// A validation function supplied by the caller.
 pub type ValidatorFn = Arc<dyn Fn(&ConfigValue) -> Result<(), String> + Send + Sync>;
 
@@ -119,14 +169,22 @@ impl Validator {
 pub struct SchemaEntry {
     /// Human-readable description shown in editors and search results.
     pub description: String,
+    /// Short human-readable label (used in settings-screen rows).
+    /// Falls back to the key name when absent.
+    pub label: Option<String>,
+    /// UI grouping page (e.g. `"Appearance"`, `"Editor"`).
+    /// Only meaningful to settings-screen code; ignored by the config engine.
+    pub page: Option<String>,
     /// The value used when no override has been set.
     pub default: ConfigValue,
     /// Validators run (in order) on every attempted write.
     pub validators: Vec<Validator>,
     /// Free-form tags used for filtering and search (e.g. `"performance"`, `"rendering"`).
     pub tags: Vec<String>,
-    /// If `true`, writes via [`NamespaceHandle::set`] are rejected.
+    /// If `true`, writes via [`OwnerHandle::set`](crate::OwnerHandle::set) are rejected.
     pub read_only: bool,
+    /// Optional widget hint for settings-screen UIs.
+    pub field_type: Option<FieldType>,
 }
 
 impl SchemaEntry {
@@ -140,16 +198,37 @@ impl SchemaEntry {
     ) -> Self {
         Self {
             description: description.into(),
+            label: None,
+            page: None,
             default: default.into(),
             validators: Vec::new(),
             tags: Vec::new(),
             read_only: false,
+            field_type: None,
         }
     }
 
     /// Attach a validator. Multiple validators may be chained.
     pub fn validator(mut self, v: Validator) -> Self {
         self.validators.push(v);
+        self
+    }
+
+    /// Set a short human-readable label (used as the row heading in settings UIs).
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    /// Assign this setting to a UI page (e.g. `"Appearance"`, `"Editor"`).
+    pub fn page(mut self, page: impl Into<String>) -> Self {
+        self.page = Some(page.into());
+        self
+    }
+
+    /// Provide a widget hint to the settings-screen renderer.
+    pub fn field_type(mut self, ft: FieldType) -> Self {
+        self.field_type = Some(ft);
         self
     }
 
@@ -166,9 +245,6 @@ impl SchemaEntry {
     }
 
     /// Mark this setting as read-only at runtime.
-    ///
-    /// Read-only settings can still be set to their default via
-    /// [`NamespaceHandle::reset_to_default`].
     pub fn read_only(mut self) -> Self {
         self.read_only = true;
         self

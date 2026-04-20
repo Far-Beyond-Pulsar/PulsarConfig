@@ -8,7 +8,7 @@ use dashmap::DashMap;
 use parking_lot::RwLock;
 
 use crate::error::ConfigError;
-use crate::schema::NamespaceSchema;
+use crate::schema::{FieldType, NamespaceSchema};
 use crate::value::{Color, ConfigValue};
 
 // ─── Key helpers ─────────────────────────────────────────────────────────────
@@ -119,12 +119,20 @@ impl SearchResult {
 /// Returned by [`ConfigManager::list_settings`] and [`OwnerHandle::list_settings`].
 #[derive(Debug, Clone)]
 pub struct SettingInfo {
+    /// The short key within the owner (e.g. `"theme"`).
     pub key: String,
+    /// The namespace this setting belongs to (e.g. `"editor"` or `"project"`).
+    pub namespace: String,
+    /// The owner path this setting belongs to (e.g. `"appearance"`).
+    pub owner: String,
+    pub label: Option<String>,
+    pub page: Option<String>,
     pub description: String,
     pub current_value: ConfigValue,
     pub default_value: ConfigValue,
     pub tags: Vec<String>,
     pub read_only: bool,
+    pub field_type: Option<FieldType>,
 }
 
 // ─── Listener internals ───────────────────────────────────────────────────────
@@ -464,6 +472,10 @@ impl ConfigManager {
                 .iter()
                 .map(|(key, entry)| SettingInfo {
                     key: key.clone(),
+                    namespace: namespace.to_owned(),
+                    owner: owner_vec.join("/"),
+                    label: entry.label.clone(),
+                    page: entry.page.clone(),
                     description: entry.description.clone(),
                     current_value: values
                         .get(key)
@@ -472,9 +484,80 @@ impl ConfigManager {
                     default_value: entry.default.clone(),
                     tags: entry.tags.clone(),
                     read_only: entry.read_only,
+                    field_type: entry.field_type.clone(),
                 })
                 .collect(),
         )
+    }
+
+    /// Return every [`SettingInfo`] across all registered owners in all namespaces.
+    pub fn list_all_settings(&self) -> Vec<SettingInfo> {
+        let mut out = Vec::new();
+        for owner_ref in self.inner.owners.iter() {
+            let compound = owner_ref.key();
+            let owner_data = owner_ref.value();
+            let Some(values) = self.inner.values.get(compound) else { continue };
+            for (key, entry) in &owner_data.entries {
+                out.push(SettingInfo {
+                    key: key.clone(),
+                    namespace: owner_data.namespace.clone(),
+                    owner: owner_data.owner.join("/"),
+                    label: entry.label.clone(),
+                    page: entry.page.clone(),
+                    description: entry.description.clone(),
+                    current_value: values.get(key).map(|v| v.clone()).unwrap_or_else(|| entry.default.clone()),
+                    default_value: entry.default.clone(),
+                    tags: entry.tags.clone(),
+                    read_only: entry.read_only,
+                    field_type: entry.field_type.clone(),
+                });
+            }
+        }
+        out
+    }
+
+    /// Return all distinct page names used by settings in a given namespace.
+    ///
+    /// Useful for building the sidebar of a settings screen.
+    pub fn list_pages(&self, namespace: &str) -> Vec<String> {
+        let mut pages: Vec<String> = self.inner
+            .owners
+            .iter()
+            .filter(|e| e.value().namespace == namespace)
+            .flat_map(|e| e.value().entries.values().filter_map(|ent| ent.page.clone()).collect::<Vec<_>>())
+            .collect();
+        pages.sort();
+        pages.dedup();
+        pages
+    }
+
+    /// Return every setting in `namespace` that belongs to `page`.
+    pub fn list_settings_by_page(&self, namespace: &str, page: &str) -> Vec<SettingInfo> {
+        let mut out = Vec::new();
+        for owner_ref in self.inner.owners.iter() {
+            let owner_data = owner_ref.value();
+            if owner_data.namespace != namespace { continue; }
+            let compound = owner_ref.key();
+            let Some(values) = self.inner.values.get(compound) else { continue };
+            for (key, entry) in &owner_data.entries {
+                if entry.page.as_deref() == Some(page) {
+                    out.push(SettingInfo {
+                        key: key.clone(),
+                        namespace: owner_data.namespace.clone(),
+                        owner: owner_data.owner.join("/"),
+                        label: entry.label.clone(),
+                        page: entry.page.clone(),
+                        description: entry.description.clone(),
+                        current_value: values.get(key).map(|v| v.clone()).unwrap_or_else(|| entry.default.clone()),
+                        default_value: entry.default.clone(),
+                        tags: entry.tags.clone(),
+                        read_only: entry.read_only,
+                        field_type: entry.field_type.clone(),
+                    });
+                }
+            }
+        }
+        out
     }
 
     // ── Global listeners ──────────────────────────────────────────────────────
@@ -806,6 +889,10 @@ impl OwnerHandle {
             .iter()
             .map(|(key, entry)| SettingInfo {
                 key: key.clone(),
+                namespace: self.namespace.clone(),
+                owner: self.owner.join("/"),
+                label: entry.label.clone(),
+                page: entry.page.clone(),
                 description: entry.description.clone(),
                 current_value: values
                     .get(key)
@@ -814,6 +901,7 @@ impl OwnerHandle {
                 default_value: entry.default.clone(),
                 tags: entry.tags.clone(),
                 read_only: entry.read_only,
+                field_type: entry.field_type.clone(),
             })
             .collect()
     }

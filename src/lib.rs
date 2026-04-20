@@ -134,5 +134,5 @@ pub mod value;
 pub use error::ConfigError;
 pub use manager::{ChangeEvent, ConfigManager, ListenerId, OwnerHandle, SearchResult, SettingInfo};
 pub use persist::{ConfigStore, PersistError};
-pub use schema::{NamespaceSchema, SchemaEntry, Validator, ValidatorFn};
+pub use schema::{DropdownOption, FieldType, NamespaceSchema, SchemaEntry, Validator, ValidatorFn};
 pub use value::{Color, ConfigValue};
