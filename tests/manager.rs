@@ -1,14 +1,28 @@
 //! Tests for `ConfigManager` — registration, cross-owner access, discovery, search.
 
-use pulsar_config::{ConfigError, ConfigManager, ConfigValue, NamespaceSchema, SchemaEntry, Validator};
+use pulsar_config::{
+    ConfigError, ConfigManager, ConfigValue, NamespaceSchema, SchemaEntry, Validator,
+};
 
 fn basic_schema() -> NamespaceSchema {
     NamespaceSchema::new("Test", "Test schema")
-        .setting("count", SchemaEntry::new("A counter", 0_i64).validator(Validator::int_range(0, 1000)))
-        .setting("label", SchemaEntry::new("A label", "default").validator(Validator::string_max_length(32)))
+        .setting(
+            "count",
+            SchemaEntry::new("A counter", 0_i64).validator(Validator::int_range(0, 1000)),
+        )
+        .setting(
+            "label",
+            SchemaEntry::new("A label", "default").validator(Validator::string_max_length(32)),
+        )
         .setting("active", SchemaEntry::new("Active flag", true))
-        .setting("ratio", SchemaEntry::new("A ratio", 1.0_f64).validator(Validator::float_range(0.0, 1.0)))
-        .setting("version", SchemaEntry::new("Version string", "1.0.0").read_only())
+        .setting(
+            "ratio",
+            SchemaEntry::new("A ratio", 1.0_f64).validator(Validator::float_range(0.0, 1.0)),
+        )
+        .setting(
+            "version",
+            SchemaEntry::new("Version string", "1.0.0").read_only(),
+        )
 }
 
 // ── Construction ─────────────────────────────────────────────────────────────
@@ -31,21 +45,27 @@ fn default_creates_empty_manager() {
 #[test]
 fn register_returns_handle_with_correct_namespace() {
     let m = ConfigManager::new();
-    let h = m.register("editor", "plugin/audio", basic_schema()).unwrap();
+    let h = m
+        .register("editor", "plugin/audio", basic_schema())
+        .unwrap();
     assert_eq!(h.namespace(), "editor");
 }
 
 #[test]
 fn register_returns_handle_with_correct_owner_segments() {
     let m = ConfigManager::new();
-    let h = m.register("editor", "plugin/audio", basic_schema()).unwrap();
+    let h = m
+        .register("editor", "plugin/audio", basic_schema())
+        .unwrap();
     assert_eq!(h.owner(), &["plugin", "audio"]);
 }
 
 #[test]
 fn register_returns_handle_with_correct_owner_path() {
     let m = ConfigManager::new();
-    let h = m.register("editor", "subsystem/physics/main", basic_schema()).unwrap();
+    let h = m
+        .register("editor", "subsystem/physics/main", basic_schema())
+        .unwrap();
     assert_eq!(h.owner_path(), "subsystem/physics/main");
 }
 
@@ -64,14 +84,19 @@ fn register_rejects_duplicate_same_namespace_and_owner() {
     let m = ConfigManager::new();
     m.register("ns", "o", basic_schema()).unwrap();
     let result = m.register("ns", "o", basic_schema());
-    assert!(matches!(result, Err(ConfigError::OwnerAlreadyRegistered { .. })));
+    assert!(matches!(
+        result,
+        Err(ConfigError::OwnerAlreadyRegistered { .. })
+    ));
 }
 
 #[test]
 fn register_allows_same_owner_in_different_namespace() {
     let m = ConfigManager::new();
     assert!(m.register("editor", "plugin/audio", basic_schema()).is_ok());
-    assert!(m.register("project", "plugin/audio", basic_schema()).is_ok());
+    assert!(m
+        .register("project", "plugin/audio", basic_schema())
+        .is_ok());
 }
 
 #[test]
@@ -108,8 +133,7 @@ fn register_empty_schema_succeeds() {
 fn register_multiple_times_with_different_owners_and_keys() {
     let m = ConfigManager::new();
     for i in 0..10 {
-        let s = NamespaceSchema::new("T", "")
-            .setting("k", SchemaEntry::new("", i as i64));
+        let s = NamespaceSchema::new("T", "").setting("k", SchemaEntry::new("", i as i64));
         m.register("ns", &format!("owner/{i}"), s).unwrap();
     }
     assert_eq!(m.list_owners("ns").len(), 10);
@@ -344,7 +368,8 @@ fn search_finds_by_exact_key_name() {
 #[test]
 fn search_finds_by_key_name_substring() {
     let m = ConfigManager::new();
-    let s = NamespaceSchema::new("T", "").setting("shadow_quality", SchemaEntry::new("desc", "high"));
+    let s =
+        NamespaceSchema::new("T", "").setting("shadow_quality", SchemaEntry::new("desc", "high"));
     m.register("ns", "o", s).unwrap();
     let results = m.search("quality");
     assert!(!results.is_empty());
@@ -353,8 +378,10 @@ fn search_finds_by_key_name_substring() {
 #[test]
 fn search_finds_by_description() {
     let m = ConfigManager::new();
-    let s = NamespaceSchema::new("T", "")
-        .setting("k", SchemaEntry::new("Gravitational acceleration constant", 9.81_f64));
+    let s = NamespaceSchema::new("T", "").setting(
+        "k",
+        SchemaEntry::new("Gravitational acceleration constant", 9.81_f64),
+    );
     m.register("ns", "o", s).unwrap();
     let results = m.search("gravitational");
     assert!(results.iter().any(|r| r.key == "k"));
@@ -363,8 +390,8 @@ fn search_finds_by_description() {
 #[test]
 fn search_finds_by_tag() {
     let m = ConfigManager::new();
-    let s = NamespaceSchema::new("T", "")
-        .setting("k", SchemaEntry::new("", 0_i64).tag("performance"));
+    let s =
+        NamespaceSchema::new("T", "").setting("k", SchemaEntry::new("", 0_i64).tag("performance"));
     m.register("ns", "o", s).unwrap();
     let results = m.search("performance");
     assert!(results.iter().any(|r| r.key == "k"));
@@ -392,8 +419,8 @@ fn search_is_case_insensitive_on_description() {
 #[test]
 fn search_is_case_insensitive_on_tag() {
     let m = ConfigManager::new();
-    let s = NamespaceSchema::new("T", "")
-        .setting("k", SchemaEntry::new("", 0_i64).tag("PERFORMANCE"));
+    let s =
+        NamespaceSchema::new("T", "").setting("k", SchemaEntry::new("", 0_i64).tag("PERFORMANCE"));
     m.register("ns", "o", s).unwrap();
     let results = m.search("performance");
     assert!(!results.is_empty());
@@ -410,8 +437,7 @@ fn search_returns_empty_when_no_match() {
 #[test]
 fn search_result_has_correct_namespace() {
     let m = ConfigManager::new();
-    let s = NamespaceSchema::new("T", "")
-        .setting("unique_key_abc", SchemaEntry::new("", 0_i64));
+    let s = NamespaceSchema::new("T", "").setting("unique_key_abc", SchemaEntry::new("", 0_i64));
     m.register("editor", "o", s).unwrap();
     let results = m.search("unique_key_abc");
     assert_eq!(results[0].namespace, "editor");
@@ -420,8 +446,7 @@ fn search_result_has_correct_namespace() {
 #[test]
 fn search_result_has_correct_owner_segments() {
     let m = ConfigManager::new();
-    let s = NamespaceSchema::new("T", "")
-        .setting("unique_key_def", SchemaEntry::new("", 0_i64));
+    let s = NamespaceSchema::new("T", "").setting("unique_key_def", SchemaEntry::new("", 0_i64));
     m.register("ns", "sub/system/core", s).unwrap();
     let results = m.search("unique_key_def");
     assert_eq!(results[0].owner, vec!["sub", "system", "core"]);
@@ -430,7 +455,8 @@ fn search_result_has_correct_owner_segments() {
 #[test]
 fn search_result_has_correct_owner_display_name() {
     let m = ConfigManager::new();
-    let s = NamespaceSchema::new("My Renderer", "").setting("unique_xyz", SchemaEntry::new("", 0_i64));
+    let s =
+        NamespaceSchema::new("My Renderer", "").setting("unique_xyz", SchemaEntry::new("", 0_i64));
     m.register("ns", "o", s).unwrap();
     let results = m.search("unique_xyz");
     assert_eq!(results[0].owner_display_name, "My Renderer");

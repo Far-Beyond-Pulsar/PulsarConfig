@@ -41,10 +41,7 @@ impl Color {
 
     /// Convert to a packed `0xRRGGBBAA` hex value.
     pub const fn to_hex(self) -> u32 {
-        ((self.r as u32) << 24)
-            | ((self.g as u32) << 16)
-            | ((self.b as u32) << 8)
-            | (self.a as u32)
+        ((self.r as u32) << 24) | ((self.g as u32) << 16) | ((self.b as u32) << 8) | (self.a as u32)
     }
 
     /// Convert the RGB channels from sRGB to linear float, returning `[r, g, b, a]`.

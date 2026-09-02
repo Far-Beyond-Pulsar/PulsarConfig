@@ -25,8 +25,14 @@ fn mgr_with_schema() -> (ConfigManager, pulsar_config::OwnerHandle) {
             "name",
             SchemaEntry::new("Name", "default").validator(Validator::string_max_length(20)),
         )
-        .setting("tint", SchemaEntry::new("Color tint", Color::rgba(255, 255, 255, 255)))
-        .setting("version", SchemaEntry::new("Engine version", "1.0.0").read_only());
+        .setting(
+            "tint",
+            SchemaEntry::new("Color tint", Color::rgba(255, 255, 255, 255)),
+        )
+        .setting(
+            "version",
+            SchemaEntry::new("Engine version", "1.0.0").read_only(),
+        );
     let h = m.register("editor", "subsystem/physics", schema).unwrap();
     (m, h)
 }
@@ -49,7 +55,10 @@ fn get_bool_correct_type() {
 fn get_bool_type_mismatch() {
     let (_, h) = mgr_with_schema();
     // "gravity" is a float, not a bool
-    assert!(matches!(h.get_bool("gravity"), Err(ConfigError::TypeMismatch { .. })));
+    assert!(matches!(
+        h.get_bool("gravity"),
+        Err(ConfigError::TypeMismatch { .. })
+    ));
 }
 
 #[test]
@@ -61,7 +70,10 @@ fn get_int_correct_type() {
 #[test]
 fn get_int_type_mismatch() {
     let (_, h) = mgr_with_schema();
-    assert!(matches!(h.get_int("enabled"), Err(ConfigError::TypeMismatch { .. })));
+    assert!(matches!(
+        h.get_int("enabled"),
+        Err(ConfigError::TypeMismatch { .. })
+    ));
 }
 
 #[test]
@@ -82,7 +94,10 @@ fn get_float_widens_int() {
 #[test]
 fn get_float_type_mismatch_from_string() {
     let (_, h) = mgr_with_schema();
-    assert!(matches!(h.get_float("preset"), Err(ConfigError::TypeMismatch { .. })));
+    assert!(matches!(
+        h.get_float("preset"),
+        Err(ConfigError::TypeMismatch { .. })
+    ));
 }
 
 #[test]
@@ -94,25 +109,37 @@ fn get_string_correct_type() {
 #[test]
 fn get_string_type_mismatch() {
     let (_, h) = mgr_with_schema();
-    assert!(matches!(h.get_string("enabled"), Err(ConfigError::TypeMismatch { .. })));
+    assert!(matches!(
+        h.get_string("enabled"),
+        Err(ConfigError::TypeMismatch { .. })
+    ));
 }
 
 #[test]
 fn get_color_correct_type() {
     let (_, h) = mgr_with_schema();
-    assert_eq!(h.get_color("tint").unwrap(), Color::rgba(255, 255, 255, 255));
+    assert_eq!(
+        h.get_color("tint").unwrap(),
+        Color::rgba(255, 255, 255, 255)
+    );
 }
 
 #[test]
 fn get_color_type_mismatch() {
     let (_, h) = mgr_with_schema();
-    assert!(matches!(h.get_color("enabled"), Err(ConfigError::TypeMismatch { .. })));
+    assert!(matches!(
+        h.get_color("enabled"),
+        Err(ConfigError::TypeMismatch { .. })
+    ));
 }
 
 #[test]
 fn get_unknown_key_returns_error() {
     let (_, h) = mgr_with_schema();
-    assert!(matches!(h.get("nonexistent"), Err(ConfigError::UnknownKey { .. })));
+    assert!(matches!(
+        h.get("nonexistent"),
+        Err(ConfigError::UnknownKey { .. })
+    ));
 }
 
 // ── Writes ────────────────────────────────────────────────────────────────────
@@ -219,14 +246,20 @@ fn set_rejects_string_too_long() {
 #[test]
 fn set_unknown_key_returns_error() {
     let (_, h) = mgr_with_schema();
-    assert!(matches!(h.set("no_such_key", 0_i64), Err(ConfigError::UnknownKey { .. })));
+    assert!(matches!(
+        h.set("no_such_key", 0_i64),
+        Err(ConfigError::UnknownKey { .. })
+    ));
 }
 
 #[test]
 fn set_is_visible_via_manager_get() {
     let (m, h) = mgr_with_schema();
     h.set("count", 500_i64).unwrap();
-    assert_eq!(m.get("editor", "subsystem/physics", "count").unwrap(), ConfigValue::Int(500));
+    assert_eq!(
+        m.get("editor", "subsystem/physics", "count").unwrap(),
+        ConfigValue::Int(500)
+    );
 }
 
 #[test]
@@ -263,7 +296,9 @@ fn reset_fires_change_event() {
     h.set("gravity", 5.0_f64).unwrap();
     let fired = Arc::new(Mutex::new(false));
     let f = Arc::clone(&fired);
-    let _g = h.on_change("gravity", move |_| *f.lock().unwrap() = true).unwrap();
+    let _g = h
+        .on_change("gravity", move |_| *f.lock().unwrap() = true)
+        .unwrap();
     h.reset_to_default("gravity").unwrap();
     assert!(*fired.lock().unwrap());
 }

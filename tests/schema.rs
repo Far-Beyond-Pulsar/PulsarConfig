@@ -17,7 +17,14 @@ fn schema_with(key: &str, entry: SchemaEntry) -> NamespaceSchema {
 fn int_range_accepts_min_bound() {
     let m = mgr();
     let h = m
-        .register("ns", "owner", schema_with("v", SchemaEntry::new("", 0_i64).validator(Validator::int_range(0, 100))))
+        .register(
+            "ns",
+            "owner",
+            schema_with(
+                "v",
+                SchemaEntry::new("", 0_i64).validator(Validator::int_range(0, 100)),
+            ),
+        )
         .unwrap();
     assert!(h.set("v", 0_i64).is_ok());
 }
@@ -26,7 +33,14 @@ fn int_range_accepts_min_bound() {
 fn int_range_accepts_max_bound() {
     let m = mgr();
     let h = m
-        .register("ns", "owner", schema_with("v", SchemaEntry::new("", 50_i64).validator(Validator::int_range(0, 100))))
+        .register(
+            "ns",
+            "owner",
+            schema_with(
+                "v",
+                SchemaEntry::new("", 50_i64).validator(Validator::int_range(0, 100)),
+            ),
+        )
         .unwrap();
     assert!(h.set("v", 100_i64).is_ok());
 }
@@ -35,7 +49,14 @@ fn int_range_accepts_max_bound() {
 fn int_range_accepts_midpoint() {
     let m = mgr();
     let h = m
-        .register("ns", "owner", schema_with("v", SchemaEntry::new("", 50_i64).validator(Validator::int_range(0, 100))))
+        .register(
+            "ns",
+            "owner",
+            schema_with(
+                "v",
+                SchemaEntry::new("", 50_i64).validator(Validator::int_range(0, 100)),
+            ),
+        )
         .unwrap();
     assert!(h.set("v", 50_i64).is_ok());
 }
@@ -44,7 +65,14 @@ fn int_range_accepts_midpoint() {
 fn int_range_rejects_below_min() {
     let m = mgr();
     let h = m
-        .register("ns", "owner", schema_with("v", SchemaEntry::new("", 50_i64).validator(Validator::int_range(0, 100))))
+        .register(
+            "ns",
+            "owner",
+            schema_with(
+                "v",
+                SchemaEntry::new("", 50_i64).validator(Validator::int_range(0, 100)),
+            ),
+        )
         .unwrap();
     assert!(h.set("v", -1_i64).is_err());
 }
@@ -53,7 +81,14 @@ fn int_range_rejects_below_min() {
 fn int_range_rejects_above_max() {
     let m = mgr();
     let h = m
-        .register("ns", "owner", schema_with("v", SchemaEntry::new("", 50_i64).validator(Validator::int_range(0, 100))))
+        .register(
+            "ns",
+            "owner",
+            schema_with(
+                "v",
+                SchemaEntry::new("", 50_i64).validator(Validator::int_range(0, 100)),
+            ),
+        )
         .unwrap();
     assert!(h.set("v", 101_i64).is_err());
 }
@@ -66,7 +101,10 @@ fn int_range_rejects_wrong_type() {
         .register(
             "ns",
             "owner",
-            schema_with("v", SchemaEntry::new("", 50_i64).validator(Validator::int_range(0, 100))),
+            schema_with(
+                "v",
+                SchemaEntry::new("", 50_i64).validator(Validator::int_range(0, 100)),
+            ),
         )
         .unwrap();
     // Float isn't an int — the validator calls as_int() which will fail
@@ -77,7 +115,14 @@ fn int_range_rejects_wrong_type() {
 fn int_range_value_unchanged_on_failure() {
     let m = mgr();
     let h = m
-        .register("ns", "o", schema_with("v", SchemaEntry::new("", 10_i64).validator(Validator::int_range(0, 20))))
+        .register(
+            "ns",
+            "o",
+            schema_with(
+                "v",
+                SchemaEntry::new("", 10_i64).validator(Validator::int_range(0, 20)),
+            ),
+        )
         .unwrap();
     h.set("v", 15_i64).unwrap();
     assert!(h.set("v", 999_i64).is_err());
@@ -90,7 +135,14 @@ fn int_range_value_unchanged_on_failure() {
 fn float_range_accepts_in_range() {
     let m = mgr();
     let h = m
-        .register("ns", "o", schema_with("v", SchemaEntry::new("", 5.0_f64).validator(Validator::float_range(0.0, 10.0))))
+        .register(
+            "ns",
+            "o",
+            schema_with(
+                "v",
+                SchemaEntry::new("", 5.0_f64).validator(Validator::float_range(0.0, 10.0)),
+            ),
+        )
         .unwrap();
     assert!(h.set("v", 5.0_f64).is_ok());
 }
@@ -99,7 +151,14 @@ fn float_range_accepts_in_range() {
 fn float_range_accepts_min_bound() {
     let m = mgr();
     let h = m
-        .register("ns", "o", schema_with("v", SchemaEntry::new("", 5.0_f64).validator(Validator::float_range(0.0, 10.0))))
+        .register(
+            "ns",
+            "o",
+            schema_with(
+                "v",
+                SchemaEntry::new("", 5.0_f64).validator(Validator::float_range(0.0, 10.0)),
+            ),
+        )
         .unwrap();
     assert!(h.set("v", 0.0_f64).is_ok());
 }
@@ -108,7 +167,14 @@ fn float_range_accepts_min_bound() {
 fn float_range_accepts_max_bound() {
     let m = mgr();
     let h = m
-        .register("ns", "o", schema_with("v", SchemaEntry::new("", 5.0_f64).validator(Validator::float_range(0.0, 10.0))))
+        .register(
+            "ns",
+            "o",
+            schema_with(
+                "v",
+                SchemaEntry::new("", 5.0_f64).validator(Validator::float_range(0.0, 10.0)),
+            ),
+        )
         .unwrap();
     assert!(h.set("v", 10.0_f64).is_ok());
 }
@@ -117,7 +183,14 @@ fn float_range_accepts_max_bound() {
 fn float_range_rejects_below_min() {
     let m = mgr();
     let h = m
-        .register("ns", "o", schema_with("v", SchemaEntry::new("", 5.0_f64).validator(Validator::float_range(0.0, 10.0))))
+        .register(
+            "ns",
+            "o",
+            schema_with(
+                "v",
+                SchemaEntry::new("", 5.0_f64).validator(Validator::float_range(0.0, 10.0)),
+            ),
+        )
         .unwrap();
     assert!(h.set("v", -0.001_f64).is_err());
 }
@@ -126,7 +199,14 @@ fn float_range_rejects_below_min() {
 fn float_range_rejects_above_max() {
     let m = mgr();
     let h = m
-        .register("ns", "o", schema_with("v", SchemaEntry::new("", 5.0_f64).validator(Validator::float_range(0.0, 10.0))))
+        .register(
+            "ns",
+            "o",
+            schema_with(
+                "v",
+                SchemaEntry::new("", 5.0_f64).validator(Validator::float_range(0.0, 10.0)),
+            ),
+        )
         .unwrap();
     assert!(h.set("v", 10.001_f64).is_err());
 }
@@ -136,7 +216,14 @@ fn float_range_widens_int_input() {
     // Validator::FloatRange calls as_float() which widens int — should succeed.
     let m = mgr();
     let h = m
-        .register("ns", "o", schema_with("v", SchemaEntry::new("", 5.0_f64).validator(Validator::float_range(0.0, 10.0))))
+        .register(
+            "ns",
+            "o",
+            schema_with(
+                "v",
+                SchemaEntry::new("", 5.0_f64).validator(Validator::float_range(0.0, 10.0)),
+            ),
+        )
         .unwrap();
     assert!(h.set("v", 3_i64).is_ok());
 }
@@ -145,7 +232,14 @@ fn float_range_widens_int_input() {
 fn float_range_wrong_type_fails() {
     let m = mgr();
     let h = m
-        .register("ns", "o", schema_with("v", SchemaEntry::new("", 5.0_f64).validator(Validator::float_range(0.0, 10.0))))
+        .register(
+            "ns",
+            "o",
+            schema_with(
+                "v",
+                SchemaEntry::new("", 5.0_f64).validator(Validator::float_range(0.0, 10.0)),
+            ),
+        )
         .unwrap();
     assert!(h.set("v", "five").is_err());
 }
@@ -156,7 +250,14 @@ fn float_range_wrong_type_fails() {
 fn string_max_length_accepts_short() {
     let m = mgr();
     let h = m
-        .register("ns", "o", schema_with("v", SchemaEntry::new("", "hi").validator(Validator::string_max_length(10))))
+        .register(
+            "ns",
+            "o",
+            schema_with(
+                "v",
+                SchemaEntry::new("", "hi").validator(Validator::string_max_length(10)),
+            ),
+        )
         .unwrap();
     assert!(h.set("v", "short").is_ok());
 }
@@ -165,7 +266,14 @@ fn string_max_length_accepts_short() {
 fn string_max_length_accepts_exactly_max() {
     let m = mgr();
     let h = m
-        .register("ns", "o", schema_with("v", SchemaEntry::new("", "").validator(Validator::string_max_length(5))))
+        .register(
+            "ns",
+            "o",
+            schema_with(
+                "v",
+                SchemaEntry::new("", "").validator(Validator::string_max_length(5)),
+            ),
+        )
         .unwrap();
     assert!(h.set("v", "abcde").is_ok());
 }
@@ -174,7 +282,14 @@ fn string_max_length_accepts_exactly_max() {
 fn string_max_length_rejects_over_max() {
     let m = mgr();
     let h = m
-        .register("ns", "o", schema_with("v", SchemaEntry::new("", "").validator(Validator::string_max_length(3))))
+        .register(
+            "ns",
+            "o",
+            schema_with(
+                "v",
+                SchemaEntry::new("", "").validator(Validator::string_max_length(3)),
+            ),
+        )
         .unwrap();
     assert!(h.set("v", "toolong").is_err());
 }
@@ -183,7 +298,14 @@ fn string_max_length_rejects_over_max() {
 fn string_max_length_zero_accepts_empty() {
     let m = mgr();
     let h = m
-        .register("ns", "o", schema_with("v", SchemaEntry::new("", "").validator(Validator::string_max_length(0))))
+        .register(
+            "ns",
+            "o",
+            schema_with(
+                "v",
+                SchemaEntry::new("", "").validator(Validator::string_max_length(0)),
+            ),
+        )
         .unwrap();
     assert!(h.set("v", "").is_ok());
 }
@@ -192,7 +314,14 @@ fn string_max_length_zero_accepts_empty() {
 fn string_max_length_zero_rejects_nonempty() {
     let m = mgr();
     let h = m
-        .register("ns", "o", schema_with("v", SchemaEntry::new("", "").validator(Validator::string_max_length(0))))
+        .register(
+            "ns",
+            "o",
+            schema_with(
+                "v",
+                SchemaEntry::new("", "").validator(Validator::string_max_length(0)),
+            ),
+        )
         .unwrap();
     assert!(h.set("v", "x").is_err());
 }
@@ -201,7 +330,14 @@ fn string_max_length_zero_rejects_nonempty() {
 fn string_max_length_wrong_type_fails() {
     let m = mgr();
     let h = m
-        .register("ns", "o", schema_with("v", SchemaEntry::new("", "").validator(Validator::string_max_length(10))))
+        .register(
+            "ns",
+            "o",
+            schema_with(
+                "v",
+                SchemaEntry::new("", "").validator(Validator::string_max_length(10)),
+            ),
+        )
         .unwrap();
     assert!(h.set("v", 5_i64).is_err());
 }
@@ -217,7 +353,8 @@ fn string_one_of_accepts_valid_option() {
             "o",
             schema_with(
                 "v",
-                SchemaEntry::new("", "low").validator(Validator::string_one_of(["low", "medium", "high"])),
+                SchemaEntry::new("", "low")
+                    .validator(Validator::string_one_of(["low", "medium", "high"])),
             ),
         )
         .unwrap();
@@ -249,7 +386,8 @@ fn string_one_of_rejects_unknown_value() {
             "o",
             schema_with(
                 "v",
-                SchemaEntry::new("", "low").validator(Validator::string_one_of(["low", "medium", "high"])),
+                SchemaEntry::new("", "low")
+                    .validator(Validator::string_one_of(["low", "medium", "high"])),
             ),
         )
         .unwrap();
@@ -457,8 +595,8 @@ fn schema_entry_multiple_tags() {
 #[test]
 fn schema_entry_tags_via_chained_tag_calls() {
     let m = mgr();
-    let s = NamespaceSchema::new("T", "")
-        .setting("k", SchemaEntry::new("", 0_i64).tag("x").tag("y"));
+    let s =
+        NamespaceSchema::new("T", "").setting("k", SchemaEntry::new("", 0_i64).tag("x").tag("y"));
     m.register("ns", "o", s).unwrap();
     let settings = m.list_settings("ns", "o").unwrap();
     let e = settings.iter().find(|s| s.key == "k").unwrap();
@@ -468,8 +606,7 @@ fn schema_entry_tags_via_chained_tag_calls() {
 #[test]
 fn schema_entry_read_only_flag_stored() {
     let m = mgr();
-    let s = NamespaceSchema::new("T", "")
-        .setting("ro", SchemaEntry::new("", 0_i64).read_only());
+    let s = NamespaceSchema::new("T", "").setting("ro", SchemaEntry::new("", 0_i64).read_only());
     m.register("ns", "o", s).unwrap();
     let settings = m.list_settings("ns", "o").unwrap();
     let e = settings.iter().find(|s| s.key == "ro").unwrap();
@@ -501,8 +638,10 @@ fn schema_entry_description_stored() {
 #[test]
 fn namespace_schema_stores_display_name_in_search() {
     let m = mgr();
-    let s = NamespaceSchema::new("My Display Name", "desc")
-        .setting("k", SchemaEntry::new("Some key", 1_i64).tag("unique_tag_xyz"));
+    let s = NamespaceSchema::new("My Display Name", "desc").setting(
+        "k",
+        SchemaEntry::new("Some key", 1_i64).tag("unique_tag_xyz"),
+    );
     m.register("ns", "owner", s).unwrap();
     let results = m.search("unique_tag_xyz");
     assert_eq!(results[0].owner_display_name, "My Display Name");

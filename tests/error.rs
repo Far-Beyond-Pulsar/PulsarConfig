@@ -212,7 +212,10 @@ fn registration_error_has_correct_owner_segments() {
     let m = ConfigManager::new();
     let s = || NamespaceSchema::new("T", "").setting("k", SchemaEntry::new("", 0_i64));
     m.register("ns", "a/b/c", s()).unwrap();
-    let err = m.register("ns", "a/b/c", s()).err().expect("expected error");
+    let err = m
+        .register("ns", "a/b/c", s())
+        .err()
+        .expect("expected error");
     if let ConfigError::OwnerAlreadyRegistered { owner, .. } = err {
         assert_eq!(owner, vec!["a", "b", "c"]);
     } else {
@@ -227,7 +230,12 @@ fn unknown_key_error_has_correct_fields() {
     let s = NamespaceSchema::new("T", "").setting("k", SchemaEntry::new("", 0_i64));
     let h = m.register("ns", "o", s).unwrap();
     let err = h.get("nonexistent").unwrap_err();
-    if let ConfigError::UnknownKey { namespace, owner, key } = err {
+    if let ConfigError::UnknownKey {
+        namespace,
+        owner,
+        key,
+    } = err
+    {
         assert_eq!(namespace, "ns");
         assert_eq!(owner, vec!["o"]);
         assert_eq!(key, "nonexistent");

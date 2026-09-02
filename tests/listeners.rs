@@ -18,8 +18,8 @@ fn make_mgr() -> (ConfigManager, pulsar_config::OwnerHandle) {
 }
 
 fn make_second_owner(m: &ConfigManager) -> pulsar_config::OwnerHandle {
-    let schema = NamespaceSchema::new("L2", "Second owner")
-        .setting("x", SchemaEntry::new("X", 0_i64));
+    let schema =
+        NamespaceSchema::new("L2", "Second owner").setting("x", SchemaEntry::new("X", 0_i64));
     m.register("ns", "owner/b", schema).unwrap()
 }
 
@@ -30,7 +30,11 @@ fn on_change_fires_on_matching_key() {
     let (_, h) = make_mgr();
     let fired = Arc::new(AtomicU64::new(0));
     let f = Arc::clone(&fired);
-    let _g = h.on_change("alpha", move |_| { f.fetch_add(1, Ordering::Relaxed); }).unwrap();
+    let _g = h
+        .on_change("alpha", move |_| {
+            f.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
     h.set("alpha", 99_i64).unwrap();
     assert_eq!(fired.load(Ordering::Relaxed), 1);
 }
@@ -40,7 +44,11 @@ fn on_change_does_not_fire_on_other_key() {
     let (_, h) = make_mgr();
     let fired = Arc::new(AtomicU64::new(0));
     let f = Arc::clone(&fired);
-    let _g = h.on_change("alpha", move |_| { f.fetch_add(1, Ordering::Relaxed); }).unwrap();
+    let _g = h
+        .on_change("alpha", move |_| {
+            f.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
     h.set("beta", 99_i64).unwrap(); // different key — should NOT fire
     assert_eq!(fired.load(Ordering::Relaxed), 0);
 }
@@ -50,7 +58,11 @@ fn on_change_provides_correct_new_value() {
     let (_, h) = make_mgr();
     let received = Arc::new(Mutex::new(None::<ConfigValue>));
     let rx = Arc::clone(&received);
-    let _g = h.on_change("alpha", move |e| *rx.lock().unwrap() = Some(e.new_value.clone())).unwrap();
+    let _g = h
+        .on_change("alpha", move |e| {
+            *rx.lock().unwrap() = Some(e.new_value.clone())
+        })
+        .unwrap();
     h.set("alpha", 42_i64).unwrap();
     assert_eq!(*received.lock().unwrap(), Some(ConfigValue::Int(42)));
 }
@@ -61,7 +73,11 @@ fn on_change_provides_old_value_is_default_on_first_write() {
     let (_, h) = make_mgr();
     let old_val = Arc::new(Mutex::new(None::<Option<ConfigValue>>));
     let ov = Arc::clone(&old_val);
-    let _g = h.on_change("alpha", move |e| *ov.lock().unwrap() = Some(e.old_value.clone())).unwrap();
+    let _g = h
+        .on_change("alpha", move |e| {
+            *ov.lock().unwrap() = Some(e.old_value.clone())
+        })
+        .unwrap();
     h.set("alpha", 100_i64).unwrap();
     let captured = old_val.lock().unwrap().clone().unwrap();
     assert_eq!(captured, Some(ConfigValue::Int(1))); // default was 1
@@ -73,11 +89,13 @@ fn on_change_provides_old_value_from_prior_write() {
     h.set("alpha", 5_i64).unwrap();
     let old_val = Arc::new(Mutex::new(None::<ConfigValue>));
     let ov = Arc::clone(&old_val);
-    let _g = h.on_change("alpha", move |e| {
-        if let Some(v) = &e.old_value {
-            *ov.lock().unwrap() = Some(v.clone());
-        }
-    }).unwrap();
+    let _g = h
+        .on_change("alpha", move |e| {
+            if let Some(v) = &e.old_value {
+                *ov.lock().unwrap() = Some(v.clone());
+            }
+        })
+        .unwrap();
     h.set("alpha", 10_i64).unwrap();
     assert_eq!(*old_val.lock().unwrap(), Some(ConfigValue::Int(5)));
 }
@@ -87,7 +105,9 @@ fn on_change_event_contains_correct_namespace() {
     let (_, h) = make_mgr();
     let ns = Arc::new(Mutex::new(String::new()));
     let n = Arc::clone(&ns);
-    let _g = h.on_change("alpha", move |e| *n.lock().unwrap() = e.namespace.clone()).unwrap();
+    let _g = h
+        .on_change("alpha", move |e| *n.lock().unwrap() = e.namespace.clone())
+        .unwrap();
     h.set("alpha", 1_i64).unwrap();
     assert_eq!(*ns.lock().unwrap(), "ns");
 }
@@ -97,7 +117,9 @@ fn on_change_event_contains_correct_owner_segments() {
     let (_, h) = make_mgr();
     let captured = Arc::new(Mutex::new(vec![]));
     let cap = Arc::clone(&captured);
-    let _g = h.on_change("alpha", move |e| *cap.lock().unwrap() = e.owner.clone()).unwrap();
+    let _g = h
+        .on_change("alpha", move |e| *cap.lock().unwrap() = e.owner.clone())
+        .unwrap();
     h.set("alpha", 1_i64).unwrap();
     assert_eq!(*captured.lock().unwrap(), vec!["owner", "a"]);
 }
@@ -107,7 +129,9 @@ fn on_change_event_contains_correct_key() {
     let (_, h) = make_mgr();
     let captured = Arc::new(Mutex::new(String::new()));
     let cap = Arc::clone(&captured);
-    let _g = h.on_change("alpha", move |e| *cap.lock().unwrap() = e.key.clone()).unwrap();
+    let _g = h
+        .on_change("alpha", move |e| *cap.lock().unwrap() = e.key.clone())
+        .unwrap();
     h.set("alpha", 1_i64).unwrap();
     assert_eq!(*captured.lock().unwrap(), "alpha");
 }
@@ -117,7 +141,9 @@ fn on_change_event_owner_path_helper() {
     let (_, h) = make_mgr();
     let path = Arc::new(Mutex::new(String::new()));
     let p = Arc::clone(&path);
-    let _g = h.on_change("alpha", move |e| *p.lock().unwrap() = e.owner_path()).unwrap();
+    let _g = h
+        .on_change("alpha", move |e| *p.lock().unwrap() = e.owner_path())
+        .unwrap();
     h.set("alpha", 1_i64).unwrap();
     assert_eq!(*path.lock().unwrap(), "owner/a");
 }
@@ -135,7 +161,11 @@ fn on_change_fires_exactly_n_times_for_n_writes() {
     let (_, h) = make_mgr();
     let count = Arc::new(AtomicU64::new(0));
     let c = Arc::clone(&count);
-    let _g = h.on_change("alpha", move |_| { c.fetch_add(1, Ordering::Relaxed); }).unwrap();
+    let _g = h
+        .on_change("alpha", move |_| {
+            c.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
     for i in 0..50 {
         h.set("alpha", i).unwrap();
     }
@@ -150,7 +180,11 @@ fn listener_id_drop_removes_listener() {
     let count = Arc::new(AtomicU64::new(0));
     let c = Arc::clone(&count);
     {
-        let _g = h.on_change("alpha", move |_| { c.fetch_add(1, Ordering::Relaxed); }).unwrap();
+        let _g = h
+            .on_change("alpha", move |_| {
+                c.fetch_add(1, Ordering::Relaxed);
+            })
+            .unwrap();
         h.set("alpha", 1_i64).unwrap(); // fires
     } // _g dropped → listener removed
     h.set("alpha", 2_i64).unwrap(); // should NOT fire
@@ -164,8 +198,16 @@ fn multiple_listeners_on_same_key_all_fire() {
     let c2 = Arc::new(AtomicU64::new(0));
     let a1 = Arc::clone(&c1);
     let a2 = Arc::clone(&c2);
-    let _g1 = h.on_change("alpha", move |_| { a1.fetch_add(1, Ordering::Relaxed); }).unwrap();
-    let _g2 = h.on_change("alpha", move |_| { a2.fetch_add(1, Ordering::Relaxed); }).unwrap();
+    let _g1 = h
+        .on_change("alpha", move |_| {
+            a1.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
+    let _g2 = h
+        .on_change("alpha", move |_| {
+            a2.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
     h.set("alpha", 1_i64).unwrap();
     assert_eq!(c1.load(Ordering::Relaxed), 1);
     assert_eq!(c2.load(Ordering::Relaxed), 1);
@@ -178,8 +220,16 @@ fn dropping_one_of_multiple_listeners_only_removes_that_one() {
     let c2 = Arc::new(AtomicU64::new(0));
     let a1 = Arc::clone(&c1);
     let a2 = Arc::clone(&c2);
-    let g1 = h.on_change("alpha", move |_| { a1.fetch_add(1, Ordering::Relaxed); }).unwrap();
-    let _g2 = h.on_change("alpha", move |_| { a2.fetch_add(1, Ordering::Relaxed); }).unwrap();
+    let g1 = h
+        .on_change("alpha", move |_| {
+            a1.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
+    let _g2 = h
+        .on_change("alpha", move |_| {
+            a2.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
     h.set("alpha", 1_i64).unwrap(); // both fire
     drop(g1);
     h.set("alpha", 2_i64).unwrap(); // only _g2 fires
@@ -194,7 +244,11 @@ fn listener_added_after_writes_starts_fresh() {
     h.set("alpha", 6_i64).unwrap();
     let count = Arc::new(AtomicU64::new(0));
     let c = Arc::clone(&count);
-    let _g = h.on_change("alpha", move |_| { c.fetch_add(1, Ordering::Relaxed); }).unwrap();
+    let _g = h
+        .on_change("alpha", move |_| {
+            c.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
     h.set("alpha", 7_i64).unwrap(); // only this fires
     assert_eq!(count.load(Ordering::Relaxed), 1);
 }
@@ -223,7 +277,9 @@ fn owner_listener_does_not_fire_for_different_owner() {
     let count = Arc::new(AtomicU64::new(0));
     let c = Arc::clone(&count);
     // Listen on owner/a — writes to owner/b should NOT fire it
-    let _g = h.on_any_change(move |_| { c.fetch_add(1, Ordering::Relaxed); });
+    let _g = h.on_any_change(move |_| {
+        c.fetch_add(1, Ordering::Relaxed);
+    });
     h2.set("x", 99_i64).unwrap();
     assert_eq!(count.load(Ordering::Relaxed), 0);
 }
@@ -234,7 +290,9 @@ fn owner_listener_raii_cleanup() {
     let count = Arc::new(AtomicU64::new(0));
     let c = Arc::clone(&count);
     {
-        let _g = h.on_any_change(move |_| { c.fetch_add(1, Ordering::Relaxed); });
+        let _g = h.on_any_change(move |_| {
+            c.fetch_add(1, Ordering::Relaxed);
+        });
         h.set("alpha", 1_i64).unwrap(); // fires
     } // dropped
     h.set("alpha", 2_i64).unwrap(); // should NOT fire
@@ -279,7 +337,9 @@ fn global_listener_raii_cleanup() {
     let count = Arc::new(AtomicU64::new(0));
     let c = Arc::clone(&count);
     {
-        let _g = m.on_any_change(move |_| { c.fetch_add(1, Ordering::Relaxed); });
+        let _g = m.on_any_change(move |_| {
+            c.fetch_add(1, Ordering::Relaxed);
+        });
         h.set("alpha", 1_i64).unwrap(); // fires
     }
     h.set("alpha", 2_i64).unwrap(); // should NOT fire
@@ -294,7 +354,11 @@ fn reset_fires_key_listener() {
     h.set("alpha", 5_i64).unwrap();
     let fired = Arc::new(AtomicU64::new(0));
     let f = Arc::clone(&fired);
-    let _g = h.on_change("alpha", move |_| { f.fetch_add(1, Ordering::Relaxed); }).unwrap();
+    let _g = h
+        .on_change("alpha", move |_| {
+            f.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
     h.reset_to_default("alpha").unwrap();
     assert_eq!(fired.load(Ordering::Relaxed), 1);
 }
@@ -304,7 +368,9 @@ fn reset_fires_owner_listener() {
     let (_, h) = make_mgr();
     let fired = Arc::new(AtomicU64::new(0));
     let f = Arc::clone(&fired);
-    let _g = h.on_any_change(move |_| { f.fetch_add(1, Ordering::Relaxed); });
+    let _g = h.on_any_change(move |_| {
+        f.fetch_add(1, Ordering::Relaxed);
+    });
     h.reset_to_default("alpha").unwrap();
     assert_eq!(fired.load(Ordering::Relaxed), 1);
 }
@@ -315,7 +381,11 @@ fn reset_event_new_value_is_default() {
     h.set("alpha", 999_i64).unwrap();
     let received = Arc::new(Mutex::new(None::<ConfigValue>));
     let rx = Arc::clone(&received);
-    let _g = h.on_change("alpha", move |e| *rx.lock().unwrap() = Some(e.new_value.clone())).unwrap();
+    let _g = h
+        .on_change("alpha", move |e| {
+            *rx.lock().unwrap() = Some(e.new_value.clone())
+        })
+        .unwrap();
     h.reset_to_default("alpha").unwrap();
     assert_eq!(*received.lock().unwrap(), Some(ConfigValue::Int(1))); // default
 }
@@ -328,7 +398,11 @@ fn key_listener_on_owner_a_not_fired_by_owner_b() {
     let h2 = make_second_owner(&m);
     let count = Arc::new(AtomicU64::new(0));
     let c = Arc::clone(&count);
-    let _g = h1.on_change("alpha", move |_| { c.fetch_add(1, Ordering::Relaxed); }).unwrap();
+    let _g = h1
+        .on_change("alpha", move |_| {
+            c.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
     h2.set("x", 1_i64).unwrap();
     assert_eq!(count.load(Ordering::Relaxed), 0);
 }
@@ -339,7 +413,11 @@ fn events_from_cloned_handle_share_listeners() {
     let h2 = h.clone();
     let count = Arc::new(AtomicU64::new(0));
     let c = Arc::clone(&count);
-    let _g = h.on_change("alpha", move |_| { c.fetch_add(1, Ordering::Relaxed); }).unwrap();
+    let _g = h
+        .on_change("alpha", move |_| {
+            c.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
     // Write via clone — should still fire the listener registered on original
     h2.set("alpha", 1_i64).unwrap();
     assert_eq!(count.load(Ordering::Relaxed), 1);
@@ -352,9 +430,11 @@ fn listener_receives_events_in_write_order() {
     let (_, h) = make_mgr();
     let values = Arc::new(Mutex::new(vec![]));
     let v = Arc::clone(&values);
-    let _g = h.on_change("alpha", move |e| {
-        v.lock().unwrap().push(e.new_value.clone());
-    }).unwrap();
+    let _g = h
+        .on_change("alpha", move |e| {
+            v.lock().unwrap().push(e.new_value.clone());
+        })
+        .unwrap();
     for i in 0..5_i64 {
         h.set("alpha", i).unwrap();
     }

@@ -1,10 +1,10 @@
 //! Multi-threaded tests verifying `ConfigManager` and `OwnerHandle` are `Send + Sync`.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     sync::{Arc, Barrier, Mutex},
     thread,
 };
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use pulsar_config::{ConfigManager, ConfigValue, NamespaceSchema, SchemaEntry};
 
@@ -36,7 +36,9 @@ fn concurrent_reads_from_eight_threads() {
             assert_eq!(v, 42);
         }));
     }
-    for jh in handles { jh.join().unwrap(); }
+    for jh in handles {
+        jh.join().unwrap();
+    }
 }
 
 // ── Concurrent writes to different keys ──────────────────────────────────────
@@ -46,8 +48,12 @@ fn concurrent_writes_to_different_keys() {
     let (_, h) = make_manager();
     let ha = Arc::new(h.clone());
     let hb = Arc::new(h.clone());
-    let t1 = thread::spawn(move || { ha.set("a", 1_i64).unwrap(); });
-    let t2 = thread::spawn(move || { hb.set("b", 2_i64).unwrap(); });
+    let t1 = thread::spawn(move || {
+        ha.set("a", 1_i64).unwrap();
+    });
+    let t2 = thread::spawn(move || {
+        hb.set("b", 2_i64).unwrap();
+    });
     t1.join().unwrap();
     t2.join().unwrap();
     assert_eq!(h.get_int("a").unwrap(), 1);
@@ -69,7 +75,9 @@ fn concurrent_writes_to_same_key_no_panic() {
             let _ = h.set("a", i); // last write wins; we only care there's no panic/deadlock
         }));
     }
-    for jh in handles { jh.join().unwrap(); }
+    for jh in handles {
+        jh.join().unwrap();
+    }
     // Value should be a valid i64 (one of 0..8)
     let v = h.get_int("a").unwrap();
     assert!((0..8).contains(&v));
@@ -89,7 +97,9 @@ fn concurrent_register_different_owners() {
             m.register("ns", &format!("owner/{i}"), s).unwrap();
         }));
     }
-    for jh in handles { jh.join().unwrap(); }
+    for jh in handles {
+        jh.join().unwrap();
+    }
     assert_eq!(m.list_owners("ns").len(), 16);
 }
 
@@ -99,7 +109,9 @@ fn concurrent_register_different_owners() {
 fn clone_shares_state_across_thread_boundary() {
     let (_, h) = make_manager();
     let h2 = h.clone();
-    let t = thread::spawn(move || { h2.set("a", 99_i64).unwrap(); });
+    let t = thread::spawn(move || {
+        h2.set("a", 99_i64).unwrap();
+    });
     t.join().unwrap();
     assert_eq!(h.get_int("a").unwrap(), 99);
 }
@@ -121,8 +133,12 @@ fn global_listener_fires_from_write_thread() {
     let (m, h) = make_manager();
     let count = Arc::new(AtomicU64::new(0));
     let c = Arc::clone(&count);
-    let _g = m.on_any_change(move |_| { c.fetch_add(1, Ordering::Relaxed); });
-    let t = thread::spawn(move || { h.set("a", 1_i64).unwrap(); });
+    let _g = m.on_any_change(move |_| {
+        c.fetch_add(1, Ordering::Relaxed);
+    });
+    let t = thread::spawn(move || {
+        h.set("a", 1_i64).unwrap();
+    });
     t.join().unwrap();
     assert_eq!(count.load(Ordering::Relaxed), 1);
 }
@@ -134,7 +150,11 @@ fn listener_id_dropped_on_different_thread() {
     let (_, h) = make_manager();
     let count = Arc::new(AtomicU64::new(0));
     let c = Arc::clone(&count);
-    let g = h.on_change("a", move |_| { c.fetch_add(1, Ordering::Relaxed); }).unwrap();
+    let g = h
+        .on_change("a", move |_| {
+            c.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
     h.set("a", 1_i64).unwrap(); // fires
     let t = thread::spawn(move || drop(g)); // drop on another thread
     t.join().unwrap();
@@ -162,7 +182,9 @@ fn concurrent_list_owners_while_registering() {
             let _ = m.list_owners("ns");
         }));
     }
-    for jh in handles { jh.join().unwrap(); }
+    for jh in handles {
+        jh.join().unwrap();
+    }
 }
 
 #[test]
@@ -177,11 +199,15 @@ fn concurrent_search_while_writing() {
     let b2 = Arc::clone(&barrier);
     let writer = thread::spawn(move || {
         b1.wait();
-        for i in 0..50_i64 { let _ = h2.set("a", i); }
+        for i in 0..50_i64 {
+            let _ = h2.set("a", i);
+        }
     });
     let searcher = thread::spawn(move || {
         b2.wait();
-        for _ in 0..10 { let _ = m2.search("k"); }
+        for _ in 0..10 {
+            let _ = m2.search("k");
+        }
     });
     writer.join().unwrap();
     searcher.join().unwrap();
@@ -194,7 +220,11 @@ fn high_frequency_writes_listener_count() {
     let (_, h) = make_manager();
     let count = Arc::new(AtomicU64::new(0));
     let c = Arc::clone(&count);
-    let _g = h.on_change("a", move |_| { c.fetch_add(1, Ordering::Relaxed); }).unwrap();
+    let _g = h
+        .on_change("a", move |_| {
+            c.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
     for i in 0..500_i64 {
         h.set("a", i).unwrap();
     }
@@ -210,7 +240,10 @@ fn multiple_threads_each_hold_listener_id() {
     let guards: Vec<_> = (0..4)
         .map(|_| {
             let c = Arc::clone(&count);
-            h.on_change("a", move |_| { c.fetch_add(1, Ordering::Relaxed); }).unwrap()
+            h.on_change("a", move |_| {
+                c.fetch_add(1, Ordering::Relaxed);
+            })
+            .unwrap()
         })
         .collect();
     h.set("a", 1_i64).unwrap(); // all 4 fire
@@ -249,6 +282,8 @@ fn concurrent_register_and_read_different_namespaces() {
             let _ = m.list_owners(&format!("ns_{i}"));
         }));
     }
-    for jh in handles { jh.join().unwrap(); }
+    for jh in handles {
+        jh.join().unwrap();
+    }
     assert!(errors.lock().unwrap().is_empty());
 }

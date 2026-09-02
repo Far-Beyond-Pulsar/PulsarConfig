@@ -167,7 +167,10 @@ fn float_type_mismatch_from_color() {
 
 #[test]
 fn string_as_str_basic() {
-    assert_eq!(ConfigValue::String("hello".into()).as_str().unwrap(), "hello");
+    assert_eq!(
+        ConfigValue::String("hello".into()).as_str().unwrap(),
+        "hello"
+    );
 }
 
 #[test]

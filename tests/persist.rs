@@ -123,7 +123,10 @@ fn toml_path_namespace_is_first_dir() {
 fn save_creates_file() {
     let (store, _) = make_store("save_creates");
     store.save("editor", "plugin/test").unwrap();
-    let h = store.manager().owner_handle("editor", "plugin/test").unwrap();
+    let h = store
+        .manager()
+        .owner_handle("editor", "plugin/test")
+        .unwrap();
     let path = store.toml_path("editor", h.owner());
     assert!(path.exists());
 }
@@ -132,19 +135,27 @@ fn save_creates_file() {
 fn save_creates_parent_directories() {
     let dir = unique_tmp("save_mkdir");
     let m = ConfigManager::new();
-    let s = NamespaceSchema::new("T", "")
-        .setting("k", SchemaEntry::new("", 0_i64));
+    let s = NamespaceSchema::new("T", "").setting("k", SchemaEntry::new("", 0_i64));
     m.register("ns", "a/b/c/d", s).unwrap();
     let store = ConfigStore::with_dir(m, &dir).unwrap();
     store.save("ns", "a/b/c/d").unwrap();
-    assert!(dir.join("ns").join("a").join("b").join("c").join("d.toml").exists());
+    assert!(dir
+        .join("ns")
+        .join("a")
+        .join("b")
+        .join("c")
+        .join("d.toml")
+        .exists());
 }
 
 #[test]
 fn save_file_contains_header_comment() {
     let (store, _) = make_store("save_header");
     store.save("editor", "plugin/test").unwrap();
-    let h = store.manager().owner_handle("editor", "plugin/test").unwrap();
+    let h = store
+        .manager()
+        .owner_handle("editor", "plugin/test")
+        .unwrap();
     let content = std::fs::read_to_string(store.toml_path("editor", h.owner())).unwrap();
     assert!(content.contains("PulsarConfig"));
 }
@@ -154,9 +165,7 @@ fn save_roundtrip_int() {
     let (store, h) = make_store("rt_int");
     h.set("count", 42_i64).unwrap();
     store.save("editor", "plugin/test").unwrap();
-    let content = std::fs::read_to_string(
-        store.toml_path("editor", h.owner())
-    ).unwrap();
+    let content = std::fs::read_to_string(store.toml_path("editor", h.owner())).unwrap();
     assert!(content.contains("count = 42"));
 }
 
@@ -202,7 +211,10 @@ fn save_roundtrip_color() {
 fn save_does_not_write_read_only_keys() {
     let (store, _) = make_store("save_ro");
     store.save("editor", "plugin/test").unwrap();
-    let h = store.manager().owner_handle("editor", "plugin/test").unwrap();
+    let h = store
+        .manager()
+        .owner_handle("editor", "plugin/test")
+        .unwrap();
     let content = std::fs::read_to_string(store.toml_path("editor", h.owner())).unwrap();
     assert!(!content.contains("version"));
 }
@@ -301,8 +313,10 @@ fn load_keeps_default_for_type_mismatch_in_file() {
 fn load_keeps_default_for_validation_failure_in_file() {
     let dir = unique_tmp("load_val_fail");
     let m = ConfigManager::new();
-    let s = NamespaceSchema::new("T", "")
-        .setting("v", SchemaEntry::new("", 50_i64).validator(Validator::int_range(0, 100)));
+    let s = NamespaceSchema::new("T", "").setting(
+        "v",
+        SchemaEntry::new("", 50_i64).validator(Validator::int_range(0, 100)),
+    );
     let h = m.register("ns", "o", s).unwrap();
     let store = ConfigStore::with_dir(m, &dir).unwrap();
     let path = store.toml_path("ns", h.owner());
@@ -316,8 +330,7 @@ fn load_keeps_default_for_validation_failure_in_file() {
 fn load_integer_to_float_widening() {
     let dir = unique_tmp("load_int_float");
     let m = ConfigManager::new();
-    let s = NamespaceSchema::new("T", "")
-        .setting("ratio", SchemaEntry::new("", 0.5_f64));
+    let s = NamespaceSchema::new("T", "").setting("ratio", SchemaEntry::new("", 0.5_f64));
     let h = m.register("ns", "o", s).unwrap();
     let store = ConfigStore::with_dir(m, &dir).unwrap();
     let path = store.toml_path("ns", h.owner());

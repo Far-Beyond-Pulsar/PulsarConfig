@@ -146,7 +146,10 @@ impl ConfigStore {
         let base = dirs::config_dir().ok_or(PersistError::NoPlatformConfigDir)?;
         let config_dir = base.join(app_name);
         fs::create_dir_all(&config_dir)?;
-        Ok(Self { manager, config_dir })
+        Ok(Self {
+            manager,
+            config_dir,
+        })
     }
 
     /// Create a store rooted at an explicit directory.
@@ -159,7 +162,10 @@ impl ConfigStore {
     ) -> Result<Self, PersistError> {
         let config_dir = config_dir.into();
         fs::create_dir_all(&config_dir)?;
-        Ok(Self { manager, config_dir })
+        Ok(Self {
+            manager,
+            config_dir,
+        })
     }
 
     /// Return a reference to the underlying [`ConfigManager`].
@@ -222,11 +228,9 @@ impl ConfigStore {
         let settings = self
             .manager
             .list_settings(namespace, owner)
-            .ok_or_else(|| {
-                ConfigError::OwnerNotFound {
-                    namespace: namespace.to_owned(),
-                    owner: owner_vec.clone(),
-                }
+            .ok_or_else(|| ConfigError::OwnerNotFound {
+                namespace: namespace.to_owned(),
+                owner: owner_vec.clone(),
             })?;
 
         let mut table = TomlMap::new();
@@ -334,8 +338,7 @@ impl ConfigStore {
         let mut first_run = Vec::new();
         for handle in handles {
             if !self.load(handle)? {
-                first_run
-                    .push((handle.namespace().to_owned(), handle.owner().to_vec()));
+                first_run.push((handle.namespace().to_owned(), handle.owner().to_vec()));
             }
         }
         Ok(first_run)
@@ -487,8 +490,7 @@ mod tests {
         let schema = NamespaceSchema::new("Test", "Test owner")
             .setting(
                 "volume",
-                SchemaEntry::new("Master volume", 80_i64)
-                    .validator(Validator::int_range(0, 100)),
+                SchemaEntry::new("Master volume", 80_i64).validator(Validator::int_range(0, 100)),
             )
             .setting("name", SchemaEntry::new("Player name", "hero"))
             .setting("enabled", SchemaEntry::new("Feature flag", true))
@@ -598,8 +600,7 @@ mod tests {
         let (store, handle) = make_store();
         store.save("editor", "subsystem/test/main").unwrap();
 
-        let content =
-            fs::read_to_string(store.toml_path("editor", handle.owner())).unwrap();
+        let content = fs::read_to_string(store.toml_path("editor", handle.owner())).unwrap();
         assert!(
             !content.contains("version"),
             "read-only key must not appear in the file"

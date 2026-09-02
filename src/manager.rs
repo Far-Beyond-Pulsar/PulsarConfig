@@ -347,12 +347,7 @@ impl ConfigManager {
     /// Read a value from any registered owner.
     ///
     /// This is a read-only cross-owner accessor. To write, use an [`OwnerHandle`].
-    pub fn get(
-        &self,
-        namespace: &str,
-        owner: &str,
-        key: &str,
-    ) -> Result<ConfigValue, ConfigError> {
+    pub fn get(&self, namespace: &str, owner: &str, key: &str) -> Result<ConfigValue, ConfigError> {
         let owner_vec = parse_owner_path(owner);
         let compound = compound_key(namespace, &owner_vec);
 
@@ -496,7 +491,9 @@ impl ConfigManager {
         for owner_ref in self.inner.owners.iter() {
             let compound = owner_ref.key();
             let owner_data = owner_ref.value();
-            let Some(values) = self.inner.values.get(compound) else { continue };
+            let Some(values) = self.inner.values.get(compound) else {
+                continue;
+            };
             for (key, entry) in &owner_data.entries {
                 out.push(SettingInfo {
                     key: key.clone(),
@@ -505,7 +502,10 @@ impl ConfigManager {
                     label: entry.label.clone(),
                     page: entry.page.clone(),
                     description: entry.description.clone(),
-                    current_value: values.get(key).map(|v| v.clone()).unwrap_or_else(|| entry.default.clone()),
+                    current_value: values
+                        .get(key)
+                        .map(|v| v.clone())
+                        .unwrap_or_else(|| entry.default.clone()),
                     default_value: entry.default.clone(),
                     tags: entry.tags.clone(),
                     read_only: entry.read_only,
@@ -520,11 +520,18 @@ impl ConfigManager {
     ///
     /// Useful for building the sidebar of a settings screen.
     pub fn list_pages(&self, namespace: &str) -> Vec<String> {
-        let mut pages: Vec<String> = self.inner
+        let mut pages: Vec<String> = self
+            .inner
             .owners
             .iter()
             .filter(|e| e.value().namespace == namespace)
-            .flat_map(|e| e.value().entries.values().filter_map(|ent| ent.page.clone()).collect::<Vec<_>>())
+            .flat_map(|e| {
+                e.value()
+                    .entries
+                    .values()
+                    .filter_map(|ent| ent.page.clone())
+                    .collect::<Vec<_>>()
+            })
             .collect();
         pages.sort();
         pages.dedup();
@@ -536,9 +543,13 @@ impl ConfigManager {
         let mut out = Vec::new();
         for owner_ref in self.inner.owners.iter() {
             let owner_data = owner_ref.value();
-            if owner_data.namespace != namespace { continue; }
+            if owner_data.namespace != namespace {
+                continue;
+            }
             let compound = owner_ref.key();
-            let Some(values) = self.inner.values.get(compound) else { continue };
+            let Some(values) = self.inner.values.get(compound) else {
+                continue;
+            };
             for (key, entry) in &owner_data.entries {
                 if entry.page.as_deref() == Some(page) {
                     out.push(SettingInfo {
@@ -548,7 +559,10 @@ impl ConfigManager {
                         label: entry.label.clone(),
                         page: entry.page.clone(),
                         description: entry.description.clone(),
-                        current_value: values.get(key).map(|v| v.clone()).unwrap_or_else(|| entry.default.clone()),
+                        current_value: values
+                            .get(key)
+                            .map(|v| v.clone())
+                            .unwrap_or_else(|| entry.default.clone()),
                         default_value: entry.default.clone(),
                         tags: entry.tags.clone(),
                         read_only: entry.read_only,
@@ -1023,8 +1037,7 @@ mod tests {
     #[test]
     fn n_level_deep_owner_path() {
         let manager = ConfigManager::new();
-        let schema =
-            NamespaceSchema::new("Deep", "").setting("v", SchemaEntry::new("", 42_i64));
+        let schema = NamespaceSchema::new("Deep", "").setting("v", SchemaEntry::new("", 42_i64));
         let h = manager.register("editor", "a/b/c/d/e/f", schema).unwrap();
         assert_eq!(h.owner(), &["a", "b", "c", "d", "e", "f"]);
         assert_eq!(h.get_int("v").unwrap(), 42);
@@ -1145,7 +1158,9 @@ mod tests {
             "shadows",
             SchemaEntry::new("Enable shadows", true).tag("graphics"),
         );
-        manager.register("editor", "renderer/shadows", schema).unwrap();
+        manager
+            .register("editor", "renderer/shadows", schema)
+            .unwrap();
         let results = manager.search("graphics");
         assert!(!results.is_empty());
     }
@@ -1153,8 +1168,7 @@ mod tests {
     #[test]
     fn list_namespaces_deduplicates() {
         let manager = ConfigManager::new();
-        let s =
-            || NamespaceSchema::new("X", "").setting("k", SchemaEntry::new("", 0_i64));
+        let s = || NamespaceSchema::new("X", "").setting("k", SchemaEntry::new("", 0_i64));
         manager.register("editor", "a", s()).unwrap();
         manager.register("editor", "b", s()).unwrap();
         manager.register("project", "a", s()).unwrap();
@@ -1166,8 +1180,7 @@ mod tests {
     #[test]
     fn list_owners_scoped_to_namespace() {
         let manager = ConfigManager::new();
-        let s =
-            || NamespaceSchema::new("X", "").setting("k", SchemaEntry::new("", 0_i64));
+        let s = || NamespaceSchema::new("X", "").setting("k", SchemaEntry::new("", 0_i64));
         manager.register("editor", "a/b", s()).unwrap();
         manager.register("editor", "a/c", s()).unwrap();
         manager.register("project", "a/b", s()).unwrap();
@@ -1184,7 +1197,8 @@ mod tests {
         let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let ev = Arc::clone(&events);
         let _guard = manager.on_any_change(move |e| {
-            ev.lock().push(format!("{}:{}", e.namespace, e.owner_path()));
+            ev.lock()
+                .push(format!("{}:{}", e.namespace, e.owner_path()));
         });
         h1.set("x", 1_i64).unwrap();
         h2.set("x", 2_i64).unwrap();
@@ -1206,8 +1220,7 @@ mod tests {
     #[test]
     fn owner_handle_retrieval() {
         let manager = ConfigManager::new();
-        let schema =
-            NamespaceSchema::new("A", "").setting("k", SchemaEntry::new("", 7_i64));
+        let schema = NamespaceSchema::new("A", "").setting("k", SchemaEntry::new("", 7_i64));
         manager.register("ns", "a/b/c", schema).unwrap();
         let h = manager.owner_handle("ns", "a/b/c").unwrap();
         assert_eq!(h.get_int("k").unwrap(), 7);

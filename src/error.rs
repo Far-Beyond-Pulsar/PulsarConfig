@@ -75,17 +75,30 @@ impl fmt::Display for ConfigError {
                 "owner '{namespace}/{owner}' not found",
                 owner = fmt_owner(owner)
             ),
-            Self::UnknownKey { namespace, owner, key } => write!(
+            Self::UnknownKey {
+                namespace,
+                owner,
+                key,
+            } => write!(
                 f,
                 "key '{key}' is not defined for owner '{namespace}/{owner}'",
                 owner = fmt_owner(owner)
             ),
-            Self::ValidationFailed { namespace, owner, key, reason } => write!(
+            Self::ValidationFailed {
+                namespace,
+                owner,
+                key,
+                reason,
+            } => write!(
                 f,
                 "validation failed for '{namespace}/{owner}::{key}': {reason}",
                 owner = fmt_owner(owner)
             ),
-            Self::ReadOnly { namespace, owner, key } => write!(
+            Self::ReadOnly {
+                namespace,
+                owner,
+                key,
+            } => write!(
                 f,
                 "setting '{namespace}/{owner}::{key}' is read-only",
                 owner = fmt_owner(owner)

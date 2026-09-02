@@ -14,12 +14,18 @@ pub struct DropdownOption {
 
 impl DropdownOption {
     pub fn new(label: impl Into<String>, value: impl Into<String>) -> Self {
-        Self { label: label.into(), value: value.into() }
+        Self {
+            label: label.into(),
+            value: value.into(),
+        }
     }
     /// Shorthand when the label and the value are the same string.
     pub fn same(s: impl Into<String>) -> Self {
         let s = s.into();
-        Self { label: s.clone(), value: s }
+        Self {
+            label: s.clone(),
+            value: s,
+        }
     }
 }
 
@@ -90,18 +96,14 @@ impl Validator {
     }
 
     /// Accept only the listed string values (case-sensitive).
-    pub fn string_one_of(
-        options: impl IntoIterator<Item = impl Into<String>>,
-    ) -> Self {
+    pub fn string_one_of(options: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self::StringOneOf(options.into_iter().map(Into::into).collect())
     }
 
     /// Supply an arbitrary validation closure.
     ///
     /// Return `Ok(())` to accept the value or `Err(reason)` to reject it.
-    pub fn custom(
-        f: impl Fn(&ConfigValue) -> Result<(), String> + Send + Sync + 'static,
-    ) -> Self {
+    pub fn custom(f: impl Fn(&ConfigValue) -> Result<(), String> + Send + Sync + 'static) -> Self {
         Self::Custom(Arc::new(f))
     }
 
@@ -129,10 +131,7 @@ impl Validator {
                 if v.len() <= *max {
                     Ok(())
                 } else {
-                    Err(format!(
-                        "string length {} exceeds maximum {max}",
-                        v.len()
-                    ))
+                    Err(format!("string length {} exceeds maximum {max}", v.len()))
                 }
             }
             Self::StringOneOf(options) => {
@@ -192,10 +191,7 @@ impl SchemaEntry {
     ///
     /// Any type that implements `Into<ConfigValue>` is accepted as the default
     /// (e.g. `true`, `42_i64`, `"medium"`, [`Color`](crate::Color)).
-    pub fn new(
-        description: impl Into<String>,
-        default: impl Into<ConfigValue>,
-    ) -> Self {
+    pub fn new(description: impl Into<String>, default: impl Into<ConfigValue>) -> Self {
         Self {
             description: description.into(),
             label: None,
@@ -286,10 +282,7 @@ pub struct NamespaceSchema {
 }
 
 impl NamespaceSchema {
-    pub fn new(
-        display_name: impl Into<String>,
-        description: impl Into<String>,
-    ) -> Self {
+    pub fn new(display_name: impl Into<String>, description: impl Into<String>) -> Self {
         Self {
             display_name: display_name.into(),
             description: description.into(),

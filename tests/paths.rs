@@ -178,17 +178,26 @@ fn list_owners_returns_segments_not_joined_path() {
 fn deep_path_write_and_read() {
     let m = ConfigManager::new();
     let schema = NamespaceSchema::new("T", "").setting("val", SchemaEntry::new("", 0_i64));
-    let h = m.register("ns", "level1/level2/level3/level4/level5", schema).unwrap();
+    let h = m
+        .register("ns", "level1/level2/level3/level4/level5", schema)
+        .unwrap();
     h.set("val", 12345_i64).unwrap();
     assert_eq!(h.get_int("val").unwrap(), 12345);
-    assert_eq!(m.get("ns", "level1/level2/level3/level4/level5", "val").unwrap(), ConfigValue::Int(12345));
+    assert_eq!(
+        m.get("ns", "level1/level2/level3/level4/level5", "val")
+            .unwrap(),
+        ConfigValue::Int(12345)
+    );
 }
 
 #[test]
 fn duplicate_registration_error_carries_correct_segments() {
     let m = ConfigManager::new();
     m.register("ns", "a/b/c", s()).unwrap();
-    let err = m.register("ns", "a/b/c", s()).err().expect("expected error");
+    let err = m
+        .register("ns", "a/b/c", s())
+        .err()
+        .expect("expected error");
     if let pulsar_config::ConfigError::OwnerAlreadyRegistered { namespace, owner } = err {
         assert_eq!(namespace, "ns");
         assert_eq!(owner, vec!["a", "b", "c"]);
