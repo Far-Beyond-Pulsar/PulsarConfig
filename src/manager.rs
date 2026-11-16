@@ -135,6 +135,15 @@ pub struct SettingInfo {
     pub field_type: Option<FieldType>,
 }
 
+impl SettingInfo {
+    /// Whether the setting applies only after the application restarts.
+    pub fn requires_restart(&self) -> bool {
+        self.tags
+            .iter()
+            .any(|tag| tag == crate::schema::TAG_REQUIRES_RESTART)
+    }
+}
+
 // ─── Listener internals ───────────────────────────────────────────────────────
 
 type ListenerCallback = Arc<dyn Fn(&ChangeEvent) + Send + Sync>;

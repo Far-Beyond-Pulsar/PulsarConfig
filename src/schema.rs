@@ -152,6 +152,10 @@ impl Validator {
 
 // ─── SchemaEntry ─────────────────────────────────────────────────────────────
 
+/// The tag of a setting that applies only after the application restarts
+/// ([`SchemaEntry::requires_restart`]).
+pub const TAG_REQUIRES_RESTART: &str = "requires_restart";
+
 /// Declares a single configuration key: its description, default value,
 /// validation rules, and optional metadata tags.
 ///
@@ -226,6 +230,13 @@ impl SchemaEntry {
     pub fn field_type(mut self, ft: FieldType) -> Self {
         self.field_type = Some(ft);
         self
+    }
+
+    /// Mark this setting as applying only after the application restarts
+    /// (e.g. it is read when a GPU device or window is created): settings
+    /// screens say so ([`TAG_REQUIRES_RESTART`]).
+    pub fn requires_restart(self) -> Self {
+        self.tag(TAG_REQUIRES_RESTART)
     }
 
     /// Add a single metadata tag.
