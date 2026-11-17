@@ -2,9 +2,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use pulsar_config::{
-    Color, ConfigManager, ConfigStore, ConfigValue, NamespaceSchema, SchemaEntry, Validator,
-};
+use pulsar_config::{Color, ConfigManager, ConfigStore, NamespaceSchema, SchemaEntry, Validator};
 
 fn unique_tmp(label: &str) -> std::path::PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
