@@ -5,7 +5,7 @@ use std::sync::{
     Arc, Mutex,
 };
 
-use pulsar_config::{ConfigError, ConfigManager, ConfigValue, NamespaceSchema, SchemaEntry};
+use pulsar_config::{ConfigManager, ConfigValue, NamespaceSchema, SchemaEntry};
 
 fn make_mgr() -> (ConfigManager, pulsar_config::OwnerHandle) {
     let m = ConfigManager::new();
