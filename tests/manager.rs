@@ -480,3 +480,53 @@ fn search_result_owner_path_helper() {
     let results = m.search("unique_path_jkl");
     assert_eq!(results[0].owner_path(), "a/b/c");
 }
+
+// ── Unregistration ───────────────────────────────────────────────────────────
+
+#[test]
+fn unregister_removes_the_owner_from_every_listing() {
+    let m = ConfigManager::new();
+    m.register("plugin", "pulsar.rust", basic_schema()).unwrap();
+    assert!(m.unregister("plugin", "pulsar.rust"));
+    assert!(m.list_owners("plugin").is_empty());
+    assert!(m.list_settings("plugin", "pulsar.rust").is_none());
+    assert!(m.owner_handle("plugin", "pulsar.rust").is_none());
+    assert!(matches!(
+        m.get("plugin", "pulsar.rust", "count"),
+        Err(ConfigError::OwnerNotFound { .. })
+    ));
+    assert!(!m.unregister("plugin", "pulsar.rust"), "second call is a no-op");
+}
+
+#[test]
+fn a_withdrawn_owner_can_register_again_with_fresh_defaults() {
+    let m = ConfigManager::new();
+    let h = m.register("plugin", "p", basic_schema()).unwrap();
+    h.set("count", 7_i64).unwrap();
+    m.unregister("plugin", "p");
+    assert!(matches!(
+        h.set("count", 1_i64),
+        Err(ConfigError::OwnerNotFound { .. })
+    ));
+    m.register("plugin", "p", basic_schema()).unwrap();
+    assert_eq!(h.get_int("count").unwrap(), 0, "the old handle sees the new owner");
+}
+
+#[test]
+fn listeners_survive_an_unregister_and_hear_the_next_registration() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    let m = ConfigManager::new();
+    let h = m.register("plugin", "p", basic_schema()).unwrap();
+    let heard = Arc::new(AtomicUsize::new(0));
+    let counter = heard.clone();
+    let _guard = h
+        .on_change("count", move |_| {
+            counter.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
+    m.unregister("plugin", "p");
+    let again = m.register("plugin", "p", basic_schema()).unwrap();
+    again.set("count", 5_i64).unwrap();
+    assert_eq!(heard.load(Ordering::Relaxed), 1);
+}

@@ -333,6 +333,21 @@ impl ConfigManager {
         })
     }
 
+    /// Withdraw a registered owner: its schema and values are dropped and it
+    /// no longer appears in any listing. Returns whether it was registered.
+    ///
+    /// Change listeners subscribed to the owner are kept, and so are the
+    /// [`OwnerHandle`]s already handed out: while the owner is withdrawn
+    /// their reads and writes fail with [`ConfigError::OwnerNotFound`], and
+    /// they work again if the same `(namespace, owner)` is registered anew.
+    /// No change event fires (no value changed; the owner left).
+    pub fn unregister(&self, namespace: &str, owner: &str) -> bool {
+        let compound = compound_key(namespace, &parse_owner_path(owner));
+        let removed = self.inner.owners.remove(&compound).is_some();
+        self.inner.values.remove(&compound);
+        removed
+    }
+
     /// Retrieve a handle to an already-registered owner.
     ///
     /// Returns `None` if the `(namespace, owner)` pair is not registered.
@@ -726,6 +741,35 @@ impl OwnerHandle {
     }
 
     // ── Writes ────────────────────────────────────────────────────────────────
+
+    /// Check `value` against the schema of `key` (type-independent rules:
+    /// read-only and validators) without storing it or notifying anyone.
+    pub fn validate(&self, key: &str, value: &ConfigValue) -> Result<(), ConfigError> {
+        let owner_data = self
+            .inner
+            .owners
+            .get(&self.compound)
+            .ok_or_else(|| self.owner_not_found())?;
+        let entry = owner_data
+            .entries
+            .get(key)
+            .ok_or_else(|| self.unknown_key(key))?;
+        if entry.read_only {
+            return Err(ConfigError::ReadOnly {
+                namespace: self.namespace.clone(),
+                owner: self.owner.clone(),
+                key: key.to_owned(),
+            });
+        }
+        entry
+            .validate(value)
+            .map_err(|reason| ConfigError::ValidationFailed {
+                namespace: self.namespace.clone(),
+                owner: self.owner.clone(),
+                key: key.to_owned(),
+                reason,
+            })
+    }
 
     /// Write a value. The value must pass all validators declared in the schema.
     ///
