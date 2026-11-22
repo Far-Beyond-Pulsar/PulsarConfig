@@ -133,6 +133,9 @@ pub struct SettingInfo {
     pub tags: Vec<String>,
     pub read_only: bool,
     pub field_type: Option<FieldType>,
+    /// Where the setting was declared in its owner's schema (0 first): the
+    /// order a settings screen lists an owner's settings in.
+    pub order: usize,
 }
 
 impl SettingInfo {
@@ -179,9 +182,20 @@ struct RegisteredOwner {
     namespace: String,
     owner: Vec<String>,
     display_name: String,
-    #[allow(dead_code)]
     description: String,
     entries: HashMap<String, crate::schema::SchemaEntry>,
+    /// The keys in the order the schema declared them.
+    order: Vec<String>,
+}
+
+impl RegisteredOwner {
+    /// Where `key` was declared (0 first; past the end when unknown).
+    fn position(&self, key: &str) -> usize {
+        self.order
+            .iter()
+            .position(|k| k == key)
+            .unwrap_or(self.order.len())
+    }
 }
 
 struct Inner {
@@ -322,6 +336,7 @@ impl ConfigManager {
                 display_name: schema.display_name,
                 description: schema.description,
                 entries: schema.entries,
+                order: schema.order,
             },
         );
 
@@ -466,6 +481,14 @@ impl ConfigManager {
             .collect()
     }
 
+    /// The display name and description `owner` registered under `namespace`
+    /// with ([`NamespaceSchema::new`]), or `None` when it is not registered.
+    pub fn owner_info(&self, namespace: &str, owner: &str) -> Option<(String, String)> {
+        let compound = compound_key(namespace, &parse_owner_path(owner));
+        let owner_data = self.inner.owners.get(&compound)?;
+        Some((owner_data.display_name.clone(), owner_data.description.clone()))
+    }
+
     /// Return every `(namespace, owner_segments)` pair registered in the manager.
     pub fn list_all_owners(&self) -> Vec<(String, Vec<String>)> {
         self.inner
@@ -504,6 +527,7 @@ impl ConfigManager {
                     tags: entry.tags.clone(),
                     read_only: entry.read_only,
                     field_type: entry.field_type.clone(),
+                    order: owner_data.position(key),
                 })
                 .collect(),
         )
@@ -534,6 +558,7 @@ impl ConfigManager {
                     tags: entry.tags.clone(),
                     read_only: entry.read_only,
                     field_type: entry.field_type.clone(),
+                    order: owner_data.position(key),
                 });
             }
         }
@@ -591,6 +616,7 @@ impl ConfigManager {
                         tags: entry.tags.clone(),
                         read_only: entry.read_only,
                         field_type: entry.field_type.clone(),
+                        order: owner_data.position(key),
                     });
                 }
             }
@@ -969,6 +995,7 @@ impl OwnerHandle {
                 tags: entry.tags.clone(),
                 read_only: entry.read_only,
                 field_type: entry.field_type.clone(),
+                order: owner_data.position(key),
             })
             .collect()
     }

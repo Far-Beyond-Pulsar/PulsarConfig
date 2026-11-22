@@ -290,6 +290,8 @@ pub struct NamespaceSchema {
     /// Short description of what this namespace configures.
     pub description: String,
     pub(crate) entries: HashMap<String, SchemaEntry>,
+    /// The keys in declaration order (a key declared twice keeps its first place).
+    pub(crate) order: Vec<String>,
 }
 
 impl NamespaceSchema {
@@ -298,12 +300,17 @@ impl NamespaceSchema {
             display_name: display_name.into(),
             description: description.into(),
             entries: HashMap::new(),
+            order: Vec::new(),
         }
     }
 
     /// Declare a setting. `key` must be unique within this namespace.
     pub fn setting(mut self, key: impl Into<String>, entry: SchemaEntry) -> Self {
-        self.entries.insert(key.into(), entry);
+        let key = key.into();
+        if !self.entries.contains_key(&key) {
+            self.order.push(key.clone());
+        }
+        self.entries.insert(key, entry);
         self
     }
 }
